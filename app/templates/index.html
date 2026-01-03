@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quant | Document Intelligence</title>
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Styles -->
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+
+<body>
+    <div class="app-background"></div>
+
+    <div class="container">
+        <header>
+            <div class="logo">
+                <i class="fa-solid fa-layer-group"></i>
+                <span>Quant</span>
+            </div>
+            <nav>
+                <a href="#" class="active">Upload</a>
+                <a href="#">Chat</a>
+                <a href="#">Settings</a>
+            </nav>
+        </header>
+
+        <main>
+            <div class="upload-card glass-panel">
+                <div class="card-header">
+                    <h1>Knowledge Base</h1>
+                    <p>Upload your company documents to train the AI.</p>
+                </div>
+
+                <div class="drop-zone" id="dropZone">
+                    <div class="drop-content">
+                        <div class="icon-wrapper">
+                            <i class="fa-solid fa-cloud-arrow-up"></i>
+                        </div>
+                        <h3>Drag & Drop PDFs</h3>
+                        <p>or <span class="browser-btn">browse files</span></p>
+                        <input type="file" id="fileInput" accept=".pdf" multiple hidden>
+                    </div>
+                </div>
+
+                <div class="file-list" id="fileList">
+                    <!-- Files will be added here -->
+                </div>
+            </div>
+
+            <!-- Retriever Testing Section -->
+            <div class="glass-panel" style="margin-top: 2rem;">
+                <div class="card-header">
+                    <h2>Test Retrieval</h2>
+                    <p>Check what the AI finds in your documents.</p>
+                </div>
+
+                <div class="search-box">
+                    <input type="text" id="queryInput" placeholder="Ask a question..." class="premium-input">
+                    <button id="searchBtn" class="premium-btn">Search</button>
+                </div>
+
+                <div id="resultsArea" class="results-area"></div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+</body>
+
+</html>
