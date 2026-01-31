@@ -2,9 +2,39 @@ from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
+from typing import Optional, List, Any
 import shutil
 import os
 from pathlib import Path
+
+
+# ==========================================
+# PYDANTIC MODELS FOR API DOCS
+# ==========================================
+
+class RAGQueryRequest(BaseModel):
+    """Request body for RAG query endpoint."""
+    user_id: str = Field(..., description="Unique identifier for the user", example="user123")
+    message: str = Field(..., description="The question or message to ask", example="What is Newton's second law?")
+    subject: str = Field(..., description="Subject name or slug", example="physics")
+    class_level: str = Field(..., alias="class", description="Class/grade level", example="a-level")
+    
+    class Config:
+        populate_by_name = True
+
+
+class RAGQueryResponse(BaseModel):
+    """Response body for RAG query endpoint."""
+    response: str = Field(..., description="The AI-generated response")
+    subject: Optional[str] = Field(None, description="Current subject name")
+    class_level: Optional[str] = Field(None, alias="class", description="Current class name")
+    sources: List[str] = Field(default_factory=list, description="List of source documents used")
+    metadata: Optional[dict] = Field(None, description="Additional response metadata")
+    error: Optional[str] = Field(None, description="Error message if request failed")
+    
+    class Config:
+        populate_by_name = True
 
 # NOTE: rag_original imports are done lazily in endpoints to reduce memory usage
 
@@ -191,34 +221,23 @@ async def health_check():
     })
 
 
-@app.post("/api/rag")
-async def rag_query(request: Request):
+@app.post("/api/rag", response_model=RAGQueryResponse)
+async def rag_query(request_body: RAGQueryRequest):
+    """
+    Query the RAG pipeline for an AI-generated response.
     
+    Send a message with context (subject/class) to get an AI-powered answer
+    based on your uploaded documents.
+    """
     try:
-        data = await request.json()
-        user_id = data.get("user_id")
-        message = data.get("message")
-        subject = data.get("subject")
-        class_level = data.get("class")
-        
-        # Validate required parameters
-        if not user_id:
-            raise HTTPException(status_code=400, detail="user_id is required")
-        if not message:
-            raise HTTPException(status_code=400, detail="message is required")
-        if not subject:
-            raise HTTPException(status_code=400, detail="subject is required")
-        if not class_level:
-            raise HTTPException(status_code=400, detail="class is required")
-        
         from app.controller.orchestrator import get_orchestrator
         orchestrator = get_orchestrator()
         
         result = await orchestrator.process_message(
-            user_id=user_id,
-            message=message,
-            subject=subject,
-            class_level=class_level,
+            user_id=request_body.user_id,
+            message=request_body.message,
+            subject=request_body.subject,
+            class_level=request_body.class_level,
         )
         
         return JSONResponse(result)
