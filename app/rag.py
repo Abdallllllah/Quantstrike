@@ -163,7 +163,10 @@ def ask_question(query: str):
     """
     vectorstore = get_vectorstore()
     if vectorstore is None:
-        return {"answer": "Vector store not initialized. Please upload documents first.", "sources": []}
+        return {
+            "answer": "No documents have been uploaded yet. Please upload some PDFs first using the Knowledge Base section above, then try searching again.",
+            "sources": []
+        }
     
     llm = get_llm()
     retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
@@ -294,7 +297,12 @@ def generate_practice_questions(topic: str, difficulty: str = "medium", count: i
     """
     vectorstore = get_vectorstore()
     if vectorstore is None:
-        return {"error": "Vector store not initialized. Please upload documents first."}
+        return {
+            "topic": topic,
+            "difficulty": difficulty,
+            "count": count,
+            "questions": "No documents have been uploaded yet. Please upload some PDFs first, then try generating practice questions."
+        }
     
     llm = get_llm()
     retriever = vectorstore.as_retriever(search_kwargs={"k": 10})

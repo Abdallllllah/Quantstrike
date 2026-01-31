@@ -362,7 +362,13 @@ def mark_student_answer(question: str, student_answer: str, max_marks: int = 5):
     """
     vectorstore = get_vectorstore()
     if vectorstore is None:
-        return {"error": "Vector store not initialized. Please upload documents first."}
+        return {
+            "question": question,
+            "student_answer": student_answer,
+            "max_marks": max_marks,
+            "marking_result": "No documents have been uploaded yet. Please upload some PDFs first, then try marking your answer."
+        }
+
     
     llm = get_llm()
     retriever = vectorstore.as_retriever(search_kwargs={"k": 8})
