@@ -35,7 +35,33 @@
             <div class="upload-card glass-panel">
                 <div class="card-header">
                     <h1>Knowledge Base</h1>
-                    <p>Upload your company documents to train the AI.</p>
+                    <p>Upload educational documents to specific subjects and classes.</p>
+                </div>
+
+                <!-- Context Selection -->
+                <div class="context-selector">
+                    <div class="form-row" style="margin-bottom: 1rem;">
+                        <div class="form-group" style="flex: 1;">
+                            <label for="subjectSelect"><i class="fa-solid fa-book"></i> Subject</label>
+                            <select id="subjectSelect" class="premium-select">
+                                <option value="">Loading subjects...</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label for="classSelect"><i class="fa-solid fa-graduation-cap"></i> Class</label>
+                            <select id="classSelect" class="premium-select" disabled>
+                                <option value="">Select a subject first</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex: 0.5;">
+                            <label for="docTypeSelect"><i class="fa-solid fa-file-alt"></i> Type</label>
+                            <select id="docTypeSelect" class="premium-select">
+                                <option value="notes">Notes</option>
+                                <option value="examples">Examples</option>
+                                <option value="exam_papers">Exam Papers</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="drop-zone" id="dropZone">
@@ -67,6 +93,76 @@
                 </div>
 
                 <div id="resultsArea" class="results-area"></div>
+            </div>
+
+            <!-- Exam Question Lookup Section -->
+            <div class="glass-panel" style="margin-top: 2rem;">
+                <div class="card-header">
+                    <h2><i class="fa-solid fa-magnifying-glass"></i> Exam Question Lookup</h2>
+                    <p>Find specific exam questions by reference (e.g., "June 2004 Physics Paper 2 Q3c")</p>
+                </div>
+
+                <div class="search-box">
+                    <input type="text" id="examRefInput" placeholder="Enter exam reference..." class="premium-input">
+                    <button id="examSearchBtn" class="premium-btn"><i class="fa-solid fa-search"></i> Find</button>
+                </div>
+
+                <div id="examResultsArea" class="results-area"></div>
+            </div>
+
+            <!-- Practice Questions Section -->
+            <div class="glass-panel" style="margin-top: 2rem;">
+                <div class="card-header">
+                    <h2><i class="fa-solid fa-brain"></i> Practice Mode</h2>
+                    <p>Generate practice questions on any topic from your documents.</p>
+                </div>
+
+                <div class="practice-form">
+                    <div class="form-row">
+                        <input type="text" id="practiceTopicInput" placeholder="Enter topic (e.g., momentum, Newton's laws)..." class="premium-input" style="flex: 2;">
+                        <select id="difficultySelect" class="premium-select">
+                            <option value="easy">Easy</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="hard">Hard</option>
+                        </select>
+                        <select id="countSelect" class="premium-select">
+                            <option value="3">3 Questions</option>
+                            <option value="5" selected>5 Questions</option>
+                            <option value="10">10 Questions</option>
+                        </select>
+                        <button id="generateQuestionsBtn" class="premium-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Generate</button>
+                    </div>
+                </div>
+
+                <div id="practiceResultsArea" class="results-area"></div>
+            </div>
+
+            <!-- Answer Marking Section -->
+            <div class="glass-panel" style="margin-top: 2rem;">
+                <div class="card-header">
+                    <h2><i class="fa-solid fa-check-double"></i> Answer Checker</h2>
+                    <p>Submit your answer for marking and get detailed feedback.</p>
+                </div>
+
+                <div class="marking-form">
+                    <div class="form-group">
+                        <label for="markingQuestionInput">Question:</label>
+                        <textarea id="markingQuestionInput" class="premium-textarea" placeholder="Enter the question here..." rows="3"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="studentAnswerInput">Your Answer:</label>
+                        <textarea id="studentAnswerInput" class="premium-textarea" placeholder="Enter your answer here..." rows="4"></textarea>
+                    </div>
+                    <div class="form-row" style="align-items: center;">
+                        <div class="marks-input">
+                            <label for="maxMarksInput">Max Marks:</label>
+                            <input type="number" id="maxMarksInput" value="5" min="1" max="20" class="premium-input small-input">
+                        </div>
+                        <button id="markAnswerBtn" class="premium-btn"><i class="fa-solid fa-pen-to-square"></i> Mark My Answer</button>
+                    </div>
+                </div>
+
+                <div id="markingResultsArea" class="results-area"></div>
             </div>
         </main>
     </div>

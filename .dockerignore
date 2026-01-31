@@ -1,0 +1,40 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Local data (not needed in container)
+uploads/
+vectorstore/
+data/
+
+# Development files
+.git/
+.gitignore
+.env
+.env.example
+*.md
+notebook/
+
+# Test files
+test_*.py
+verify*.py
+
+# UV/Poetry lock files (requirements.txt is used instead)
+uv.lock
+poetry.lock
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
