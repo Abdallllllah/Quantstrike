@@ -26,8 +26,11 @@ class SubjectRAGConfig(BaseModel):
     
     def get_qa_prompt(self) -> str:
         """Get the Q&A prompt template for this subject."""
+        # Validate that template has required variables for LangChain StuffDocumentsChain
         if self.prompt_template:
-            return self.prompt_template
+            if '{context}' in self.prompt_template and '{question}' in self.prompt_template:
+                return self.prompt_template
+            # Invalid template - fall through to default
         
         subject_name = self.subject_name
         # Use string concatenation to avoid f-string escaping issues with LangChain variables
