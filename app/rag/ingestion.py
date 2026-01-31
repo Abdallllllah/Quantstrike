@@ -17,6 +17,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.db.supabase import SupabaseClient, get_supabase_client
 from app.db.models import DocumentCreate
+from app.db.storage import get_storage_client
 from app.rag.vectorstore import SupabaseVectorStore
 from app.rag_legacy import get_embeddings
 
@@ -70,7 +71,19 @@ class IngestionService:
             )
             doc_record = self._supabase.create_document(doc_create)
             
-            # 3. Load and split PDF
+            # 3. Backup to cloud storage (Supabase Storage)
+            try:
+                storage = get_storage_client()
+                # Check if bucket exists/upload
+                success_stor, result_stor = storage.upload_file(file_path)
+                if success_stor:
+                    # Update document record with storage URL if we had a field for it
+                    # For now, we just ensure it's in the bucket
+                    print(f"Cloud backup successful for {path.name}")
+            except Exception as se:
+                print(f"Cloud backup failed (non-fatal): {se}")
+
+            # 4. Load and split PDF
             loader = PyPDFLoader(file_path)
             pages = loader.load()
             
