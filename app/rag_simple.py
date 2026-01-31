@@ -171,42 +171,28 @@ def ask_question(query: str):
     llm = get_llm()
     retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
     
-    # Custom Prompt
-    template = """You are a precise and analytical assistant. Your task is to answer questions based STRICTLY on the provided context.
+    # Custom Prompt - Clean plain text, no markdown
+    template = """You are a friendly and knowledgeable tutor helping a student.
 
-CRITICAL INSTRUCTIONS:
-1. **Numerical Accuracy**: When the question contains numbers that differ from examples in the context, you MUST:
-   - Extract the exact numerical values from the QUESTION (not the context examples)
-   - Identify the underlying formula, method, or concept from the context
-   - Apply that formula/method using the numbers from the QUESTION
-   - Show your calculations step-by-step with explicit arithmetic
+IMPORTANT FORMATTING RULES:
+- Do NOT use asterisks, bold, or any markdown formatting in your response.
+- Write in plain text only.
+- Use numbered lists (1, 2, 3) for steps, not bullet points.
+- Keep your language natural and conversational.
 
-2. **Conceptual Understanding**: 
-   - Recognize when questions ask about the same concept with different parameters
-   - Adapt formulas and methods to the specific numbers in the question
-   - Do NOT simply copy answers from context if the numbers differ
-
-3. **Calculation Protocol**:
-   - State what values you're using and where they come from (the question)
-   - Show each calculation step explicitly (e.g., "5 × 3 = 15")
-   - Verify your final answer makes logical sense
-   - Include units where applicable
-
-4. **Answer Quality**:
-   - Be professional, clear, and thorough
-   - If you don't know or the context doesn't contain relevant information, explicitly state: "I don't have enough information in the provided context to answer this question."
-   - Never fabricate information not present in the context
-   - For multi-step problems, number your steps clearly
-
-5. **Context Fidelity**:
-   - If the context shows an example with different numbers, extract the METHOD and apply it to the question's numbers
-   - Cite relevant parts of the context when applicable
+HOW TO ANSWER:
+1. Answer the student's question directly using the context provided.
+2. If the question involves calculations, show your work step by step.
+3. Extract the exact numbers from the QUESTION (not from examples in the context).
+4. Apply formulas and methods from the context using those numbers.
+5. Include units where applicable.
+6. If you cannot answer from the context, say: "I don't have enough information to answer this."
 
 Context: {context}
 
 Question: {question}
 
-Helpful Answer (show all work for calculations):"""
+Answer:"""
     
     QA_CHAIN_PROMPT = PromptTemplate.from_template(template)
     
@@ -307,31 +293,28 @@ def generate_practice_questions(topic: str, difficulty: str = "medium", count: i
     llm = get_llm()
     retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     
-    template = """You are an expert exam question writer. Generate practice questions based on the provided educational content.
+    template = """You are an expert exam question writer.
 
-Topic requested: {question}
-Difficulty level: """ + difficulty + """
-Number of questions to generate: """ + str(count) + """
+IMPORTANT FORMATTING RULES:
+- Do NOT use asterisks, bold, or any markdown formatting.
+- Write in plain text only.
+- Use simple numbered lists.
 
-INSTRUCTIONS:
-1. Study the context carefully to understand the topic
-2. Generate exactly """ + str(count) + """ practice questions at """ + difficulty + """ difficulty
-3. For each question, provide:
-   - The question number
-   - The question text (clear and exam-style)
-   - Mark allocation (1-5 marks based on complexity)
-   - A brief expected answer
+Generate practice questions based on this topic: {question}
+Difficulty: """ + difficulty + """
+Number of questions: """ + str(count) + """
 
-FORMAT your response as:
----
+For each question, provide:
+1. The question number and text
+2. Mark allocation (1-5 marks)
+3. A brief expected answer
+
+Format:
 Q1. [Question text] [X marks]
 Expected Answer: [Brief answer]
 
 Q2. [Question text] [X marks]
 Expected Answer: [Brief answer]
----
-
-Make questions progressively assess understanding from basic recall to application.
 
 Context: {context}
 
@@ -369,56 +352,38 @@ def mark_student_answer(question: str, student_answer: str, max_marks: int = 5):
     llm = get_llm()
     retriever = vectorstore.as_retriever(search_kwargs={"k": 8})
     
-    template = """You are a STRICT and PRECISE exam marker. Your task is to carefully mark a student's answer, paying special attention to numerical accuracy.
+    template = """You are an exam marker. Mark the student's answer carefully.
+
+IMPORTANT FORMATTING RULES:
+- Do NOT use asterisks, bold, or any markdown formatting.
+- Write in plain text only.
+- Use simple numbered lists where needed.
 
 QUESTION: {question}
-
 STUDENT'S ANSWER: """ + student_answer + """
-
 MAXIMUM MARKS: """ + str(max_marks) + """
 
-CRITICAL MARKING INSTRUCTIONS:
+MARKING INSTRUCTIONS:
+1. Verify all calculations in the student's answer.
+2. Compare the final answer to the correct answer.
+3. Deduct marks for: wrong answers, calculation errors, missing steps, wrong formulas, missing units.
+4. Give partial credit for correct method even if arithmetic is wrong.
 
-1. **VERIFY ALL CALCULATIONS**: 
-   - Check EVERY arithmetic operation in the student's answer
-   - If the student writes "5 × 20 = 500", this is WRONG (correct: 5 × 20 = 100)
-   - Perform each calculation yourself to verify correctness
-   - Arithmetic errors should result in mark deductions
-
-2. **CHECK FINAL ANSWERS**:
-   - Compare the student's final numerical answer to your calculated correct answer
-   - If the numbers don't match, the answer is INCORRECT regardless of method
-   - State clearly: "Student's answer: [X], Correct answer: [Y]"
-
-3. **MARKING CRITERIA** (deduct marks for):
-   - Wrong final answer (major deduction)
-   - Arithmetic/calculation errors
-   - Missing steps or explanations
-   - Incorrect formulas or methods
-   - Missing units
-
-4. **BE STRICT BUT FAIR**:
-   - Give credit for correct method even if arithmetic is wrong (partial marks)
-   - But never give full marks if the final answer is wrong
-   - Show your own calculation as the model answer
-
-PROVIDE YOUR RESPONSE IN THIS EXACT FORMAT:
+Provide your response in this format:
 
 MARKS AWARDED: [X]/""" + str(max_marks) + """
 
 CALCULATION CHECK:
-[Show your step-by-step verification of the student's calculations]
-[Clearly state if any calculations are CORRECT or INCORRECT]
+[Your verification of the student's work]
 
 FEEDBACK:
 [What was done well and what needs improvement]
 
 ERRORS FOUND:
-- [List any errors, including arithmetic mistakes]
-(If no errors, state "No errors found")
+[List any errors, or "No errors found"]
 
 MODEL ANSWER:
-[The complete correct solution with your own calculations]
+[The correct solution]
 
 Context: {context}
 

@@ -118,7 +118,7 @@ async def query_documents(request: Request):
              raise HTTPException(status_code=400, detail="Query is required")
         
        
-        from app.rag import ask_question
+        from app.rag_simple import ask_question
         
         # Use full RAG
         result = ask_question(query)
@@ -163,7 +163,7 @@ async def generate_questions(request: Request):
         if not isinstance(count, int) or count < 1 or count > 10:
             count = 5
         
-        from app.rag import generate_practice_questions
+        from app.rag_simple import generate_practice_questions
         result = generate_practice_questions(topic, difficulty, count)
         
         return JSONResponse(result)
