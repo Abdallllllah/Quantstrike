@@ -165,6 +165,7 @@ class Orchestrator:
             
             # Return formatted response
             return {
+                "user_id": user_id,
                 "response": response_text,
                 "subject": subject_obj.name,
                 "class": class_obj.name,

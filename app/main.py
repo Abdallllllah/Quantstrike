@@ -26,6 +26,7 @@ class RAGQueryRequest(BaseModel):
 
 class RAGQueryResponse(BaseModel):
     """Response body for RAG query endpoint."""
+    user_id: str = Field(..., description="The user's identifier")
     response: str = Field(..., description="The AI-generated response")
     subject: Optional[str] = Field(None, description="Current subject name")
     class_level: Optional[str] = Field(None, alias="class", description="Current class name")
