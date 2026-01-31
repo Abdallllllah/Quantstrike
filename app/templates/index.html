@@ -80,83 +80,22 @@
                 </div>
             </div>
 
-            <!-- Retriever Testing Section -->
+            <!-- API Information -->
             <div class="glass-panel" style="margin-top: 2rem;">
                 <div class="card-header">
-                    <h2>Test Retrieval</h2>
-                    <p>Check what the AI finds in your documents.</p>
+                    <h2><i class="fa-solid fa-code"></i> API Access</h2>
+                    <p>Use the REST API to query your documents after uploading.</p>
                 </div>
-
-                <div class="search-box">
-                    <input type="text" id="queryInput" placeholder="Ask a question..." class="premium-input">
-                    <button id="searchBtn" class="premium-btn">Search</button>
+                <div
+                    style="padding: 1rem; background: rgba(0,0,0,0.2); border-radius: 8px; font-family: monospace; font-size: 0.85rem;">
+                    <p style="color: #a0a0a0; margin-bottom: 0.5rem;">Endpoint:</p>
+                    <code style="color: #00ff88;">POST /api/rag</code>
+                    <p style="color: #a0a0a0; margin-top: 1rem; margin-bottom: 0.5rem;">Required fields:</p>
+                    <code
+                        style="color: #ffffff; display: block;">{ "user_id": "...", "message": "...", "subject": "...", "class": "..." }</code>
                 </div>
-
-                <div id="resultsArea" class="results-area"></div>
             </div>
 
-
-            <!-- Practice Questions Section -->
-            <div class="glass-panel" style="margin-top: 2rem;">
-                <div class="card-header">
-                    <h2><i class="fa-solid fa-brain"></i> Practice Mode</h2>
-                    <p>Generate practice questions on any topic from your documents.</p>
-                </div>
-
-                <div class="practice-form">
-                    <div class="form-row">
-                        <input type="text" id="practiceTopicInput"
-                            placeholder="Enter topic (e.g., momentum, Newton's laws)..." class="premium-input"
-                            style="flex: 2;">
-                        <select id="difficultySelect" class="premium-select">
-                            <option value="easy">Easy</option>
-                            <option value="medium" selected>Medium</option>
-                            <option value="hard">Hard</option>
-                        </select>
-                        <select id="countSelect" class="premium-select">
-                            <option value="3">3 Questions</option>
-                            <option value="5" selected>5 Questions</option>
-                            <option value="10">10 Questions</option>
-                        </select>
-                        <button id="generateQuestionsBtn" class="premium-btn"><i
-                                class="fa-solid fa-wand-magic-sparkles"></i> Generate</button>
-                    </div>
-                </div>
-
-                <div id="practiceResultsArea" class="results-area"></div>
-            </div>
-
-            <!-- Answer Marking Section -->
-            <div class="glass-panel" style="margin-top: 2rem;">
-                <div class="card-header">
-                    <h2><i class="fa-solid fa-check-double"></i> Answer Checker</h2>
-                    <p>Submit your answer for marking and get detailed feedback.</p>
-                </div>
-
-                <div class="marking-form">
-                    <div class="form-group">
-                        <label for="markingQuestionInput">Question:</label>
-                        <textarea id="markingQuestionInput" class="premium-textarea"
-                            placeholder="Enter the question here..." rows="3"></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label for="studentAnswerInput">Your Answer:</label>
-                        <textarea id="studentAnswerInput" class="premium-textarea"
-                            placeholder="Enter your answer here..." rows="4"></textarea>
-                    </div>
-                    <div class="form-row" style="align-items: center;">
-                        <div class="marks-input">
-                            <label for="maxMarksInput">Max Marks:</label>
-                            <input type="number" id="maxMarksInput" value="5" min="1" max="20"
-                                class="premium-input small-input">
-                        </div>
-                        <button id="markAnswerBtn" class="premium-btn"><i class="fa-solid fa-pen-to-square"></i> Mark My
-                            Answer</button>
-                    </div>
-                </div>
-
-                <div id="markingResultsArea" class="results-area"></div>
-            </div>
         </main>
     </div>
 
