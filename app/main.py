@@ -33,9 +33,12 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 # Templates
 templates = Jinja2Templates(directory="app/templates")
 
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def read_root(request: Request):
+    if request.method == "HEAD":
+        return HTMLResponse(content="", status_code=200)
     return templates.TemplateResponse("index.html", {"request": request})
+
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
