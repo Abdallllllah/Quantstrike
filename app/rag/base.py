@@ -30,6 +30,7 @@ class SubjectRAGConfig(BaseModel):
             return self.prompt_template
         
         subject_name = self.subject_name
+        # Use string concatenation to avoid f-string escaping issues with LangChain variables
         return f"""You are a friendly and knowledgeable {subject_name} tutor helping a student.
 
 IMPORTANT FORMATTING RULES:
@@ -46,9 +47,9 @@ HOW TO ANSWER:
 5. Include units where applicable.
 6. If you cannot answer from the context, say: "I don't have enough information to answer this."
 
-Context: {{{{context}}}}
+Context: """ + "{context}" + """
 
-Question: {{{{question}}}}
+Question: """ + "{question}" + """
 
 Answer:"""
     
@@ -61,9 +62,9 @@ IMPORTANT FORMATTING RULES:
 - Write in plain text only.
 - Use simple numbered lists.
 
-Generate practice questions based on this topic: {{{{question}}}}
-Difficulty: {{{{difficulty}}}}
-Number of questions: {{{{count}}}}
+Generate practice questions based on this topic: """ + "{question}" + """
+Difficulty: {difficulty}
+Number of questions: {count}
 
 For each question, provide:
 1. The question number and text
@@ -77,7 +78,7 @@ Expected Answer: [Brief answer]
 Q2. [Question text] [X marks]
 Expected Answer: [Brief answer]
 
-Context: {{{{context}}}}
+Context: """ + "{context}" + """
 
 Practice Questions:"""
     
@@ -90,9 +91,9 @@ IMPORTANT FORMATTING RULES:
 - Write in plain text only.
 - Use simple numbered lists where needed.
 
-QUESTION: {{{{question}}}}
-STUDENT'S ANSWER: {{{{student_answer}}}}
-MAXIMUM MARKS: {{{{max_marks}}}}
+QUESTION: """ + "{question}" + """
+STUDENT'S ANSWER: {student_answer}
+MAXIMUM MARKS: {max_marks}
 
 MARKING INSTRUCTIONS:
 1. Verify all calculations in the student's answer.
@@ -102,7 +103,7 @@ MARKING INSTRUCTIONS:
 
 Provide your response in this format:
 
-MARKS AWARDED: [X]/{{{{max_marks}}}}
+MARKS AWARDED: [X]/{max_marks}
 
 CALCULATION CHECK:
 [Your verification of the student's work]
@@ -116,7 +117,7 @@ ERRORS FOUND:
 MODEL ANSWER:
 [The correct solution]
 
-Context: {{{{context}}}}
+Context: """ + "{context}" + """
 
 Marking:"""
 
