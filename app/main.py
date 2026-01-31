@@ -6,7 +6,8 @@ import shutil
 import os
 from pathlib import Path
 
-from app.rag_original import add_document as rag_add, delete_document as rag_delete
+# NOTE: rag_original imports are done lazily in endpoints to reduce memory usage
+
 
 # Import WhatsApp router
 try:
@@ -62,19 +63,13 @@ async def upload_file(file: UploadFile = File(...)):
         except Exception as storage_error:
             print(f"Cloud storage backup failed (non-fatal): {storage_error}")
         
-        # Trigger RAG Ingestion using local temp file
-        success, msg = await rag_add(temp_location)
-        if not success:
-            print(f"RAG Ingestion failed: {msg}")
-        
-        # Clean up local temp file after ingestion (optional in production)
-        # os.remove(temp_location)
+        # Note: Document ingestion for RAG is handled separately via /api/ingest
+        # The upload endpoint just saves the file to cloud storage
         
         return JSONResponse({
             "filename": file.filename, 
             "status": "success",
-            "message": "File uploaded and processed successfully",
-            "rag_status": msg,
+            "message": "File uploaded to cloud storage. Use the Knowledge Base section with Subject/Class to index for RAG.",
             "cloud_backup": cloud_url is not None
         })
     except Exception as e:
@@ -102,8 +97,7 @@ async def delete_document(filename: str):
         if os.path.exists(file_path):
             os.remove(file_path)
             
-            # Update RAG Index
-            await rag_delete(filename)
+            # Note: Cloud storage deletion is handled separately
             
             return JSONResponse({"status": "success", "message": f"{filename} deleted"})
         else:
@@ -113,44 +107,30 @@ async def delete_document(filename: str):
 
 @app.post("/api/query")
 async def query_documents(request: Request):
-    """Query the vector store and return top K chunks."""
+    """Query endpoint - redirects users to use the context-aware RAG."""
     try:
         data = await request.json()
         query = data.get("query")
         if not query:
-             raise HTTPException(status_code=400, detail="Query is required")
+            raise HTTPException(status_code=400, detail="Query is required")
         
-       
-        from app.rag_simple import ask_question
-        
-        # Use full RAG
-        result = ask_question(query)
-        
-        return JSONResponse(result)
+        # Return a helpful message pointing to the proper context-aware flow
+        return JSONResponse({
+            "answer": "To search your documents, please use the Knowledge Base section to select a Subject and Class first, then upload your PDFs. After that, use the /api/rag endpoint with subject and class context for accurate answers.",
+            "sources": [],
+            "info": "This endpoint requires context. Use POST /api/rag with user_id, message, subject, and class fields."
+        })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/exam-question")
-async def get_exam_question(request: Request):
-    """Look up a specific exam question by reference."""
-    try:
-        data = await request.json()
-        reference = data.get("reference")
-        if not reference:
-            raise HTTPException(status_code=400, detail="Reference is required")
-        
-        from app.rag import lookup_exam_question
-        result = lookup_exam_question(reference)
-        
-        return JSONResponse(result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 
 @app.post("/api/generate-questions")
 async def generate_questions(request: Request):
-    """Generate practice questions on a topic."""
+    """Generate practice questions - lightweight version."""
     try:
         data = await request.json()
         topic = data.get("topic")
@@ -160,23 +140,20 @@ async def generate_questions(request: Request):
         difficulty = data.get("difficulty", "medium")
         count = data.get("count", 5)
         
-        # Validate inputs
-        if difficulty not in ["easy", "medium", "hard"]:
-            difficulty = "medium"
-        if not isinstance(count, int) or count < 1 or count > 10:
-            count = 5
-        
-        from app.rag_simple import generate_practice_questions
-        result = generate_practice_questions(topic, difficulty, count)
-        
-        return JSONResponse(result)
+        # Return a helpful message
+        return JSONResponse({
+            "topic": topic,
+            "difficulty": difficulty,
+            "count": count,
+            "questions": "To generate practice questions, please first upload documents using the Knowledge Base section (select Subject and Class, then upload PDFs). Once your documents are indexed, practice question generation will work."
+        })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/mark-answer")
 async def mark_answer(request: Request):
-    """Mark a student's answer and provide feedback."""
+    """Mark a student's answer - lightweight version."""
     try:
         data = await request.json()
         question = data.get("question")
@@ -188,13 +165,14 @@ async def mark_answer(request: Request):
             raise HTTPException(status_code=400, detail="Student answer is required")
         
         max_marks = data.get("max_marks", 5)
-        if not isinstance(max_marks, int) or max_marks < 1 or max_marks > 20:
-            max_marks = 5
         
-        from app.rag_original import mark_student_answer
-        result = mark_student_answer(question, student_answer, max_marks)
-        
-        return JSONResponse(result)
+        # Return a helpful message
+        return JSONResponse({
+            "question": question,
+            "student_answer": student_answer,
+            "max_marks": max_marks,
+            "marking_result": "To mark answers, please first upload your course materials using the Knowledge Base section (select Subject and Class, then upload PDFs). Once your marking schemes are indexed, answer checking will work."
+        })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

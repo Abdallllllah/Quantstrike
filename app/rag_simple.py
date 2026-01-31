@@ -173,7 +173,11 @@ def ask_question(query: str):
     
     # Custom Prompt - Clean plain text, no markdown
     template = """You are a friendly and knowledgeable tutor helping a student.
-
+You are a helpful tutor. Answer the student's question directly and clearly 
+using the retrieved context. Do not mention "the context" or "the provided 
+information" in your response. Do not complain about missing information. 
+Write as if you're explaining directly to the student in a natural, 
+conversational way
 IMPORTANT FORMATTING RULES:
 - Do NOT use asterisks, bold, or any markdown formatting in your response.
 - Write in plain text only.
@@ -308,6 +312,11 @@ For each question, provide:
 1. The question number and text
 2. Mark allocation (1-5 marks)
 3. A brief expected answer
+You are a helpful tutor. Answer the student's question directly and clearly 
+using the retrieved context. Do not mention "the context" or "the provided 
+information" in your response. Do not complain about missing information. 
+Write as if you're explaining directly to the student in a natural, 
+conversational way
 
 Format:
 Q1. [Question text] [X marks]
@@ -384,6 +393,11 @@ ERRORS FOUND:
 
 MODEL ANSWER:
 [The correct solution]
+You are a helpful tutor. Answer the student's question directly and clearly 
+using the retrieved context. Do not mention "the context" or "the provided 
+information" in your response. Do not complain about missing information. 
+Write as if you're explaining directly to the student in a natural, 
+conversational way
 
 Context: {context}
 
