@@ -355,6 +355,35 @@ class SupabaseClient:
         
         return [self._to_document(row) for row in result.data]
     
+    def get_documents_by_school(
+        self,
+        school_id: UUID,
+        subject_id: Optional[UUID] = None,
+        class_id: Optional[UUID] = None,
+    ) -> list[Document]:
+        """Get all documents for a school, optionally filtered by subject/class."""
+        query = self.client.table("documents").select("*").eq(
+            "school_id", str(school_id)
+        )
+        if subject_id:
+            query = query.eq("subject_id", str(subject_id))
+        if class_id:
+            query = query.eq("class_id", str(class_id))
+        
+        result = query.order("created_at", desc=True).execute()
+        
+        return [self._to_document(row) for row in result.data]
+    
+    def delete_document(self, document_id: UUID) -> bool:
+        """Delete a document and its embeddings."""
+        # Delete embeddings first
+        self.delete_embeddings_by_document(document_id)
+        # Delete document record
+        self.client.table("documents").delete().eq(
+            "id", str(document_id)
+        ).execute()
+        return True
+    
     # ==========================================
     # EMBEDDING OPERATIONS
     # ==========================================

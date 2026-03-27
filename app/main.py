@@ -346,24 +346,60 @@ async def list_classes(subject_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/ingest")
-async def ingest_document(
-    file: UploadFile = File(...),
-    school_id: str = Form(..., description="School ID for data isolation"),
-    subject_id: str = Form(...),
-    class_id: str = Form(...),
-    doc_type: str = Form("notes")
+# ==========================================
+# SCHOOL DOCUMENT MANAGEMENT API
+# ==========================================
+
+@app.post("/api/schools/{school_slug}/documents")
+async def upload_school_document(
+    school_slug: str,
+    file: UploadFile = File(..., description="PDF file to upload"),
+    subject: str = Form(..., description="Subject slug (e.g. 'physics')"),
+    class_level: str = Form(..., alias="class", description="Class name (e.g. 'Grade 10')"),
+    doc_type: str = Form("notes", description="Document type: notes, examples, past_paper, marking_scheme"),
 ):
     """
-    Ingest a PDF document into the school-scoped RAG pipeline.
+    Upload a PDF document for a school's knowledge base.
     
-    Documents are isolated per school — a document ingested for School A
-    will never appear in search results for School B.
+    The document will be chunked, embedded, and stored in the school's
+    isolated vector store. Only students from this school can retrieve it.
+    
+    **Accepts subject and class by name/slug** — no UUIDs needed.
     """
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
     
     try:
+        from app.db.supabase import get_supabase_client
+        from uuid import UUID
+        client = get_supabase_client()
+        
+        # Resolve school
+        school = client.get_school_by_slug(school_slug)
+        if not school:
+            raise HTTPException(status_code=404, detail=f"School '{school_slug}' not found")
+        
+        # Resolve subject
+        subject_obj = client.get_subject_by_slug(subject)
+        if not subject_obj:
+            raise HTTPException(status_code=404, detail=f"Subject '{subject}' not found")
+        
+        # Resolve class
+        classes = client.get_classes_by_subject(subject_obj.id)
+        class_obj = None
+        class_lower = class_level.lower()
+        for cls in classes:
+            if cls.name.lower() == class_lower or class_lower in cls.name.lower():
+                class_obj = cls
+                break
+        
+        if not class_obj:
+            available = [c.name for c in classes]
+            raise HTTPException(
+                status_code=404,
+                detail=f"Class '{class_level}' not found for subject '{subject}'. Available: {available}"
+            )
+        
         # Save file temporarily
         temp_dir = Path("uploads")
         temp_dir.mkdir(exist_ok=True)
@@ -372,7 +408,163 @@ async def ingest_document(
         with open(file_location, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # Trigger contextual ingestion (school-scoped)
+        # Ingest into school-scoped vector store
+        from app.rag.ingestion import get_ingestion_service
+        ingestion_service = get_ingestion_service()
+        
+        success, msg = await ingestion_service.ingest_document(
+            file_path=str(file_location),
+            school_id=str(school.id),
+            subject_id=str(subject_obj.id),
+            class_id=str(class_obj.id),
+            doc_type=doc_type
+        )
+        
+        if not success:
+            raise HTTPException(status_code=500, detail=msg)
+        
+        return JSONResponse({
+            "status": "success",
+            "filename": file.filename,
+            "school": school.name,
+            "subject": subject_obj.name,
+            "class": class_obj.name,
+            "doc_type": doc_type,
+            "message": msg
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/schools/{school_slug}/documents")
+async def list_school_documents(
+    school_slug: str,
+    subject: Optional[str] = None,
+    class_level: Optional[str] = None,
+):
+    """
+    List all documents uploaded by a school.
+    
+    Optionally filter by subject slug and/or class name.
+    """
+    try:
+        from app.db.supabase import get_supabase_client
+        client = get_supabase_client()
+        
+        # Resolve school
+        school = client.get_school_by_slug(school_slug)
+        if not school:
+            raise HTTPException(status_code=404, detail=f"School '{school_slug}' not found")
+        
+        # Optional subject/class filters
+        subject_id = None
+        class_id = None
+        
+        if subject:
+            subject_obj = client.get_subject_by_slug(subject)
+            if subject_obj:
+                subject_id = subject_obj.id
+                
+                if class_level:
+                    classes = client.get_classes_by_subject(subject_obj.id)
+                    class_lower = class_level.lower()
+                    for cls in classes:
+                        if cls.name.lower() == class_lower or class_lower in cls.name.lower():
+                            class_id = cls.id
+                            break
+        
+        documents = client.get_documents_by_school(
+            school_id=school.id,
+            subject_id=subject_id,
+            class_id=class_id,
+        )
+        
+        return JSONResponse({
+            "school": school.name,
+            "count": len(documents),
+            "documents": [
+                {
+                    "id": str(doc.id),
+                    "filename": doc.filename,
+                    "doc_type": doc.doc_type,
+                    "chunk_count": doc.chunk_count,
+                    "is_indexed": doc.is_indexed,
+                    "created_at": doc.created_at.isoformat(),
+                }
+                for doc in documents
+            ]
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/schools/{school_slug}/documents/{document_id}")
+async def delete_school_document(school_slug: str, document_id: str):
+    """
+    Delete a document and all its embeddings from a school's knowledge base.
+    
+    This permanently removes the document and its vector embeddings.
+    """
+    try:
+        from app.db.supabase import get_supabase_client
+        from uuid import UUID
+        client = get_supabase_client()
+        
+        # Resolve school
+        school = client.get_school_by_slug(school_slug)
+        if not school:
+            raise HTTPException(status_code=404, detail=f"School '{school_slug}' not found")
+        
+        # Verify document belongs to this school
+        doc_uuid = UUID(document_id)
+        docs = client.get_documents_by_school(school_id=school.id)
+        doc_match = next((d for d in docs if d.id == doc_uuid), None)
+        
+        if not doc_match:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Document '{document_id}' not found for school '{school_slug}'"
+            )
+        
+        # Delete document and embeddings
+        client.delete_document(doc_uuid)
+        
+        return JSONResponse({
+            "status": "success",
+            "message": f"Deleted '{doc_match.filename}' and all its embeddings",
+            "document_id": document_id,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Keep legacy /api/ingest for backward compatibility
+@app.post("/api/ingest", include_in_schema=False)
+async def ingest_document_legacy(
+    file: UploadFile = File(...),
+    school_id: str = Form(...),
+    subject_id: str = Form(...),
+    class_id: str = Form(...),
+    doc_type: str = Form("notes")
+):
+    """Legacy ingest endpoint (accepts UUIDs). Use /api/schools/{slug}/documents instead."""
+    if not file.filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    
+    try:
+        temp_dir = Path("uploads")
+        temp_dir.mkdir(exist_ok=True)
+        file_location = temp_dir / file.filename
+        
+        with open(file_location, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
         from app.rag.ingestion import get_ingestion_service
         ingestion_service = get_ingestion_service()
         
@@ -392,9 +584,9 @@ async def ingest_document(
             "status": "success",
             "message": msg
         })
+    except HTTPException:
+        raise
     except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 
