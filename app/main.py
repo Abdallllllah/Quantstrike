@@ -7,8 +7,25 @@ from typing import Optional, List, Any
 import shutil
 import os
 from pathlib import Path
+from fastapi.middleware.cors import CORSMiddleware
 
 
+app = FastAPI(
+    title="Quant AI Tutor",
+    description="Multi-Subject AI Tutor RAG System with WhatsApp Integration",
+    version="2.0.0"
+)
+
+# ==========================
+# ENABLE CORS FOR ALL ORIGINS
+# ==========================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # allow all origins
+    allow_credentials=False,  # must be False when using "*"
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # ==========================================
 # PYDANTIC MODELS FOR API DOCS
 # ==========================================
@@ -51,11 +68,7 @@ except ImportError:
 
 Path("uploads").mkdir(exist_ok=True)
 
-app = FastAPI(
-    title="Quant AI Tutor",
-    description="Multi-Subject AI Tutor RAG System with WhatsApp Integration",
-    version="2.0.0"
-)
+
 
 # Include WhatsApp router if available
 if WHATSAPP_ENABLED:
