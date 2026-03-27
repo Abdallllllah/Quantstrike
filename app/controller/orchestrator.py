@@ -4,7 +4,7 @@ RAG Service Orchestrator - Clean integration for retrieval and response generati
 Intent classification is handled upstream by another service.
 This module focuses solely on:
 - User context management
-- RAG pipeline invocation
+- School-scoped RAG pipeline invocation
 - Response formatting
 """
 from typing import Optional, Any
@@ -15,7 +15,7 @@ import os
 from app.db.supabase import SupabaseClient, get_supabase_client
 from app.db.models import (
     User, Message, MessageCreate, 
-    Subject, Class, ConversationContext
+    Subject, Class, School, ConversationContext
 )
 from app.rag.registry import RAGRegistry, get_rag_registry
 from app.context.manager import ContextManager, get_context_manager
@@ -44,10 +44,10 @@ class Orchestrator:
     handled upstream by another service.
     
     Flow:
-    1. Receive message with user_id, subject, class
-    2. Resolve subject and class from provided identifiers
-    3. Load conversation history
-    4. Call RAG pipeline for retrieval and generation
+    1. Receive message with user_id, school_id, subject, class
+    2. Resolve school, subject, and class from provided identifiers
+    3. Load conversation history (school-scoped)
+    4. Call RAG pipeline for retrieval and generation (school-scoped)
     5. Save response
     6. Return formatted response
     """
@@ -68,6 +68,7 @@ class Orchestrator:
         self,
         user_id: str,
         message: str,
+        school_id: str,
         subject: str,
         class_level: str,
         **kwargs
@@ -75,26 +76,34 @@ class Orchestrator:
         """
         Process a message through the RAG pipeline.
         
-        Intent classification is handled upstream. This method focuses
-        solely on retrieval and response generation.
-        
         Args:
             user_id: User identifier
             message: The user's query text
+            school_id: School identifier (slug or UUID) for data isolation
             subject: Subject/topic identifier (slug or ID)
             class_level: Class/grade level identifier (slug or ID)
             **kwargs: Additional metadata
         
         Returns:
             dict with:
+                - user_id: The user's identifier
                 - response: The assistant's response text
+                - school: Current school name
                 - subject: Current subject
                 - class: Current class
                 - sources: Retrieved document sources
                 - metadata: Additional response metadata
         """
         try:
-            # Step 1: Resolve subject and class
+            # Step 1: Resolve school
+            school_obj = self._resolve_school(school_id)
+            if not school_obj:
+                return {
+                    "response": f"School '{school_id}' not found. Please provide a valid school identifier.",
+                    "error": "school_not_found",
+                }
+            
+            # Step 2: Resolve subject and class
             subject_obj = self._resolve_subject(subject)
             class_obj = self._resolve_class(class_level, subject_obj)
             
@@ -110,63 +119,68 @@ class Orchestrator:
                     "error": "class_not_found",
                 }
             
-            # Step 2: Get or create user
-            user = self._get_or_create_user(user_id)
+            # Step 3: Get or create user (linked to school)
+            user = self._get_or_create_user(user_id, school_obj.id)
             
-            # Step 3: Update user's current context
+            # Step 4: Update user's current context
             self._supabase.update_user_context(
                 user.id, subject_obj.id, class_obj.id
             )
             
-            # Step 4: Load conversation history
+            # Step 5: Load conversation history (school-scoped)
             history = self._context.get_history(
                 user_id=user.id,
+                school_id=school_obj.id,
                 subject_id=subject_obj.id,
                 class_id=class_obj.id,
                 limit=self.DEFAULT_HISTORY_LIMIT,
             )
             
-            # Build conversation context
+            # Build conversation context (includes school_id for isolation)
             context = ConversationContext(
                 user_id=user.id,
+                school_id=school_obj.id,
                 subject_id=subject_obj.id,
                 class_id=class_obj.id,
                 history=history,
             )
             
-            # Step 5: Save user message
+            # Step 6: Save user message
             self._save_message(
                 user_id=user.id,
+                school_id=school_obj.id,
                 subject_id=subject_obj.id,
                 class_id=class_obj.id,
                 role="user",
                 content=message,
             )
             
-            # Step 6: Call RAG pipeline for retrieval and generation
+            # Step 7: Call RAG pipeline (school-scoped retrieval)
             rag_response = await self._rag.process_request(
                 intent="question",
                 message=message,
                 context=context,
             )
             
-            # Step 7: Save assistant response
+            # Step 8: Save assistant response
             response_text = self._extract_response_text(rag_response)
             self._save_message(
                 user_id=user.id,
+                school_id=school_obj.id,
                 subject_id=subject_obj.id,
                 class_id=class_obj.id,
                 role="assistant",
                 content=response_text,
             )
             
-            # Step 8: Update context cache
-            self._context.invalidate(user.id, subject_obj.id, class_obj.id)
+            # Step 9: Update context cache
+            self._context.invalidate(user.id, school_obj.id, subject_obj.id, class_obj.id)
             
             # Return formatted response
             return {
                 "user_id": user_id,
                 "response": response_text,
+                "school": school_obj.name,
                 "subject": subject_obj.name,
                 "class": class_obj.name,
                 "sources": rag_response.get("sources", []),
@@ -183,15 +197,31 @@ class Orchestrator:
                 "traceback": traceback.format_exc() if os.getenv("DEBUG") == "true" else None
             }
     
+    def _resolve_school(self, school_id: str) -> Optional[School]:
+        """
+        Resolve school from identifier (slug or UUID).
+        
+        Args:
+            school_id: School slug (e.g., "greenwood-high") or UUID string
+        
+        Returns:
+            School object or None if not found
+        """
+        # Try as slug first
+        school_obj = self._supabase.get_school_by_slug(school_id)
+        if school_obj:
+            return school_obj
+        
+        # Try as UUID
+        try:
+            uuid_obj = UUID(school_id)
+            return self._supabase.get_school_by_id(uuid_obj)
+        except (ValueError, AttributeError):
+            return None
+    
     def _resolve_subject(self, subject: str) -> Optional[Subject]:
         """
         Resolve subject from identifier (slug or UUID).
-        
-        Args:
-            subject: Subject slug (e.g., "physics") or UUID string
-        
-        Returns:
-            Subject object or None if not found
         """
         # Try as slug first
         subject_obj = self._supabase.get_subject_by_slug(subject)
@@ -208,13 +238,6 @@ class Orchestrator:
     def _resolve_class(self, class_level: str, subject: Optional[Subject]) -> Optional[Class]:
         """
         Resolve class from identifier.
-        
-        Args:
-            class_level: Class identifier (name, slug, or UUID)
-            subject: The resolved subject object
-        
-        Returns:
-            Class object or None if not found
         """
         if not subject:
             return None
@@ -227,7 +250,6 @@ class Orchestrator:
         for cls in classes:
             if cls.name.lower() == class_level_lower:
                 return cls
-            # Also check if the class_level is contained in the name
             if class_level_lower in cls.name.lower():
                 return cls
         
@@ -241,17 +263,16 @@ class Orchestrator:
         # Return first class as default if available
         return classes[0] if classes else None
     
-    def _get_or_create_user(self, user_id: str) -> User:
+    def _get_or_create_user(self, user_id: str, school_id: Optional[UUID] = None) -> User:
         """
-        Get or create a user by identifier.
-        
-        Uses user_id as phone_number for compatibility with existing schema.
+        Get or create a user by identifier, linked to a school.
         """
-        return self._supabase.get_or_create_user(user_id)
+        return self._supabase.get_or_create_user(user_id, school_id=school_id)
     
     def _save_message(
         self,
         user_id: UUID,
+        school_id: Optional[UUID],
         subject_id: Optional[UUID],
         class_id: Optional[UUID],
         role: str,
@@ -259,11 +280,13 @@ class Orchestrator:
     ):
         """Save a message to the database."""
         u_id = UUID(str(user_id)) if user_id else None
+        sch_id = UUID(str(school_id)) if school_id else None
         s_id = UUID(str(subject_id)) if subject_id else None
         c_id = UUID(str(class_id)) if class_id else None
         
         self._supabase.save_message(MessageCreate(
             user_id=u_id,
+            school_id=sch_id,
             subject_id=s_id,
             class_id=c_id,
             role=role,

@@ -17,6 +17,7 @@ class RAGQueryRequest(BaseModel):
     """Request body for RAG query endpoint."""
     user_id: str = Field(..., description="Unique identifier for the user", example="user123")
     message: str = Field(..., description="The question or message to ask", example="What is Newton's second law?")
+    school_id: str = Field(..., description="School identifier (slug or UUID) for data isolation", example="greenwood-high")
     subject: str = Field(..., description="Subject name or slug", example="physics")
     class_level: str = Field(..., alias="class", description="Class/grade level", example="a-level")
     
@@ -28,6 +29,7 @@ class RAGQueryResponse(BaseModel):
     """Response body for RAG query endpoint."""
     user_id: str = Field(..., description="The user's identifier")
     response: str = Field(..., description="The AI-generated response")
+    school: Optional[str] = Field(None, description="School name")
     subject: Optional[str] = Field(None, description="Current subject name")
     class_level: Optional[str] = Field(None, alias="class", description="Current class name")
     sources: List[str] = Field(default_factory=list, description="List of source documents used")
@@ -237,6 +239,7 @@ async def rag_query(request_body: RAGQueryRequest):
         result = await orchestrator.process_message(
             user_id=request_body.user_id,
             message=request_body.message,
+            school_id=request_body.school_id,
             subject=request_body.subject,
             class_level=request_body.class_level,
         )
@@ -249,6 +252,33 @@ async def rag_query(request_body: RAGQueryRequest):
         )
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/schools")
+async def list_schools():
+    """List all available schools."""
+    try:
+        from app.db.supabase import get_supabase_client
+        client = get_supabase_client()
+        schools = client.get_all_schools()
+        
+        return JSONResponse({
+            "schools": [
+                {
+                    "id": str(s.id),
+                    "name": s.name,
+                    "slug": s.slug,
+                }
+                for s in schools
+            ]
+        })
+    except ImportError:
+        return JSONResponse({
+            "schools": [],
+            "error": "Supabase not configured"
+        })
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -306,12 +336,16 @@ async def list_classes(subject_id: str):
 @app.post("/api/ingest")
 async def ingest_document(
     file: UploadFile = File(...),
+    school_id: str = Form(..., description="School ID for data isolation"),
     subject_id: str = Form(...),
     class_id: str = Form(...),
     doc_type: str = Form("notes")
 ):
     """
-    Ingest a PDF document into the context-aware RAG pipeline.
+    Ingest a PDF document into the school-scoped RAG pipeline.
+    
+    Documents are isolated per school — a document ingested for School A
+    will never appear in search results for School B.
     """
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
@@ -325,12 +359,13 @@ async def ingest_document(
         with open(file_location, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # Trigger contextual ingestion
+        # Trigger contextual ingestion (school-scoped)
         from app.rag.ingestion import get_ingestion_service
         ingestion_service = get_ingestion_service()
         
         success, msg = await ingestion_service.ingest_document(
             file_path=str(file_location),
+            school_id=school_id,
             subject_id=subject_id,
             class_id=class_id,
             doc_type=doc_type

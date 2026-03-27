@@ -7,6 +7,24 @@ from pydantic import BaseModel, Field, ConfigDict
 from uuid import UUID
 
 
+class School(BaseModel):
+    """School/organization model for multi-tenant isolation."""
+    id: UUID
+    name: str
+    slug: str
+    is_active: bool = True
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SchoolCreate(BaseModel):
+    """Model for creating a new school."""
+    name: str
+    slug: str
+
+
 class Subject(BaseModel):
     """Subject/course model (e.g., Math, Physics, Chemistry)."""
     id: UUID
@@ -39,6 +57,7 @@ class User(BaseModel):
     id: UUID
     phone_number: str
     display_name: Optional[str] = None
+    school_id: Optional[UUID] = None
     current_subject_id: Optional[UUID] = None
     current_class_id: Optional[UUID] = None
     preferences: Optional[dict[str, Any]] = Field(default_factory=dict)
@@ -52,12 +71,14 @@ class UserCreate(BaseModel):
     """Model for creating a new user."""
     phone_number: str
     display_name: Optional[str] = None
+    school_id: Optional[UUID] = None
 
 
 class Message(BaseModel):
     """Conversation message model."""
     id: UUID
     user_id: UUID
+    school_id: Optional[UUID] = None
     subject_id: Optional[UUID] = None
     class_id: Optional[UUID] = None
     role: str  # 'user' or 'assistant'
@@ -72,6 +93,7 @@ class Message(BaseModel):
 class MessageCreate(BaseModel):
     """Model for creating a new message."""
     user_id: UUID
+    school_id: Optional[UUID] = None
     subject_id: Optional[UUID] = None
     class_id: Optional[UUID] = None
     role: str
@@ -83,6 +105,7 @@ class MessageCreate(BaseModel):
 class Document(BaseModel):
     """Document metadata model."""
     id: UUID
+    school_id: Optional[UUID] = None
     subject_id: UUID
     class_id: UUID
     filename: str
@@ -99,6 +122,7 @@ class Document(BaseModel):
 
 class DocumentCreate(BaseModel):
     """Model for creating a new document."""
+    school_id: Optional[UUID] = None
     subject_id: UUID
     class_id: UUID
     filename: str
@@ -110,6 +134,7 @@ class Embedding(BaseModel):
     """Vector embedding model."""
     id: UUID
     document_id: UUID
+    school_id: Optional[UUID] = None
     subject_id: UUID
     class_id: UUID
     content: str
@@ -125,6 +150,7 @@ class Embedding(BaseModel):
 class EmbeddingCreate(BaseModel):
     """Model for creating a new embedding."""
     document_id: UUID
+    school_id: Optional[UUID] = None
     subject_id: UUID
     class_id: UUID
     content: str
@@ -147,6 +173,7 @@ class SimilarityResult(BaseModel):
 class ConversationContext(BaseModel):
     """Conversation context passed to RAG functions."""
     user_id: UUID
+    school_id: UUID
     subject_id: UUID
     class_id: UUID
     history: list[Message] = Field(default_factory=list)

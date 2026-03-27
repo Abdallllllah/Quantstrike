@@ -53,7 +53,7 @@ class RAGRegistry:
     def __init__(self, supabase: SupabaseClient):
         self._supabase = supabase
         self._config_cache: dict[str, SubjectRAGConfig] = {}
-        self._store_cache: dict[tuple[str, str], SupabaseVectorStore] = {}
+        self._store_cache: dict[tuple[str, str, str], SupabaseVectorStore] = {}
         
         # Map intents to handler methods
         # These call the existing RAG functions with proper context
@@ -108,19 +108,21 @@ class RAGRegistry:
     
     def get_vectorstore(
         self, 
+        school_id: str,
         subject_id: str, 
         class_id: str
     ) -> SupabaseVectorStore:
         """
-        Get class-scoped vector store.
+        Get school+class-scoped vector store.
         
         Creates a new SupabaseVectorStore instance scoped to the 
-        specific subject and class for filtering during retrieval.
+        specific school, subject, and class for filtering during retrieval.
         """
-        key = (subject_id, class_id)
+        key = (school_id, subject_id, class_id)
         if key not in self._store_cache:
             store = SupabaseVectorStore(
                 supabase=self._supabase,
+                school_id=UUID(school_id),
                 subject_id=UUID(subject_id),
                 class_id=UUID(class_id),
                 embeddings=get_embeddings(),
@@ -165,6 +167,7 @@ class RAGRegistry:
         """Handle a question intent using the RAG pipeline."""
         config = self.get_subject_config(str(context.subject_id))
         vectorstore = self.get_vectorstore(
+            str(context.school_id),
             str(context.subject_id), 
             str(context.class_id)
         )
@@ -182,6 +185,10 @@ class RAGRegistry:
         )
         
         qa_prompt = PromptTemplate.from_template(prompt_with_history)
+        
+        # Debug logging
+        print(f"DEBUG: Prompt template input_variables: {qa_prompt.input_variables}")
+        print(f"DEBUG: Prompt ends with: {prompt_with_history[-100:]}")
         
         qa_chain = RetrievalQA.from_chain_type(
             llm=llm,
@@ -216,6 +223,7 @@ class RAGRegistry:
         """Handle a practice question generation request."""
         config = self.get_subject_config(str(context.subject_id))
         vectorstore = self.get_vectorstore(
+            str(context.school_id),
             str(context.subject_id), 
             str(context.class_id)
         )
@@ -262,6 +270,7 @@ class RAGRegistry:
         """Handle answer marking request."""
         config = self.get_subject_config(str(context.subject_id))
         vectorstore = self.get_vectorstore(
+            str(context.school_id),
             str(context.subject_id), 
             str(context.class_id)
         )
@@ -329,7 +338,7 @@ Previous Conversation:
         # Remove all stores for this subject
         keys_to_remove = [
             key for key in self._store_cache 
-            if key[0] == subject_id
+            if key[1] == subject_id
         ]
         for key in keys_to_remove:
             del self._store_cache[key]

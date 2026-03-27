@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from app.db.models import (
     User, UserCreate,
     Subject, Class,
+    School, SchoolCreate,
     Message, MessageCreate,
     Document, DocumentCreate,
     EmbeddingCreate, SimilarityResult
@@ -62,6 +63,51 @@ class SupabaseClient:
     def _to_document(self, data: dict) -> Document:
         return Document.model_validate(data)
     
+    def _to_school(self, data: dict) -> School:
+        return School.model_validate(data)
+    
+    # ==========================================
+    # SCHOOL OPERATIONS
+    # ==========================================
+    
+    def get_all_schools(self, active_only: bool = True) -> list[School]:
+        """Get all schools."""
+        query = self.client.table("schools").select("*")
+        if active_only:
+            query = query.eq("is_active", True)
+        result = query.execute()
+        
+        return [self._to_school(row) for row in result.data]
+    
+    def get_school_by_slug(self, slug: str) -> Optional[School]:
+        """Get school by slug."""
+        result = self.client.table("schools").select("*").eq(
+            "slug", slug
+        ).execute()
+        
+        if result.data and len(result.data) > 0:
+            return self._to_school(result.data[0])
+        return None
+    
+    def get_school_by_id(self, school_id: UUID) -> Optional[School]:
+        """Get school by ID."""
+        result = self.client.table("schools").select("*").eq(
+            "id", str(school_id)
+        ).execute()
+        
+        if result.data and len(result.data) > 0:
+            return self._to_school(result.data[0])
+        return None
+    
+    def create_school(self, school: SchoolCreate) -> School:
+        """Create a new school."""
+        result = self.client.table("schools").insert({
+            "name": school.name,
+            "slug": school.slug,
+        }).execute()
+        
+        return self._to_school(result.data[0])
+    
     # ==========================================
     # USER OPERATIONS
     # ==========================================
@@ -88,19 +134,26 @@ class SupabaseClient:
     
     def create_user(self, user: UserCreate) -> User:
         """Create a new user."""
-        result = self.client.table("users").insert({
+        data = {
             "phone_number": user.phone_number,
             "display_name": user.display_name,
-        }).execute()
+        }
+        if user.school_id:
+            data["school_id"] = str(user.school_id)
+        
+        result = self.client.table("users").insert(data).execute()
         
         return User(**result.data[0])
     
-    def get_or_create_user(self, phone_number: str) -> User:
+    def get_or_create_user(self, phone_number: str, school_id: Optional[UUID] = None) -> User:
         """Get existing user or create new one."""
         user = self.get_user_by_phone(phone_number)
         if user:
             return user
-        return self.create_user(UserCreate(phone_number=phone_number))
+        return self.create_user(UserCreate(
+            phone_number=phone_number,
+            school_id=school_id,
+        ))
     
     def update_user_context(
         self, 
@@ -205,6 +258,7 @@ class SupabaseClient:
     def get_conversation_history(
         self,
         user_id: UUID,
+        school_id: Optional[UUID] = None,
         subject_id: Optional[UUID] = None,
         class_id: Optional[UUID] = None,
         limit: int = 10
@@ -214,6 +268,8 @@ class SupabaseClient:
             "user_id", str(user_id)
         )
         
+        if school_id:
+            query = query.eq("school_id", str(school_id))
         if subject_id:
             query = query.eq("subject_id", str(subject_id))
         if class_id:
@@ -236,6 +292,8 @@ class SupabaseClient:
             "metadata": message.metadata or {},
         }
         
+        if message.school_id:
+            data["school_id"] = str(message.school_id)
         if message.subject_id:
             data["subject_id"] = str(message.subject_id)
         if message.class_id:
@@ -251,13 +309,17 @@ class SupabaseClient:
     
     def create_document(self, doc: DocumentCreate) -> Document:
         """Create a new document record."""
-        result = self.client.table("documents").insert({
+        data = {
             "subject_id": str(doc.subject_id),
             "class_id": str(doc.class_id),
             "filename": doc.filename,
             "file_path": doc.file_path,
             "doc_type": doc.doc_type,
-        }).execute()
+        }
+        if doc.school_id:
+            data["school_id"] = str(doc.school_id)
+        
+        result = self.client.table("documents").insert(data).execute()
         
         return self._to_document(result.data[0])
     
@@ -277,14 +339,19 @@ class SupabaseClient:
     def get_documents_by_class(
         self, 
         subject_id: UUID, 
-        class_id: UUID
+        class_id: UUID,
+        school_id: Optional[UUID] = None,
     ) -> list[Document]:
-        """Get all documents for a class."""
-        result = self.client.table("documents").select("*").eq(
+        """Get all documents for a class, optionally scoped to a school."""
+        query = self.client.table("documents").select("*").eq(
             "subject_id", str(subject_id)
         ).eq(
             "class_id", str(class_id)
-        ).execute()
+        )
+        if school_id:
+            query = query.eq("school_id", str(school_id))
+        
+        result = query.execute()
         
         return [self._to_document(row) for row in result.data]
     
@@ -299,7 +366,7 @@ class SupabaseClient:
         
         data = []
         for emb in embeddings:
-            data.append({
+            row = {
                 "document_id": str(emb.document_id),
                 "subject_id": str(emb.subject_id),
                 "class_id": str(emb.class_id),
@@ -308,7 +375,10 @@ class SupabaseClient:
                 "page_number": emb.page_number,
                 "chunk_index": emb.chunk_index,
                 "metadata": emb.metadata,
-            })
+            }
+            if emb.school_id:
+                row["school_id"] = str(emb.school_id)
+            data.append(row)
         
         result = self.client.table("embeddings").insert(data).execute()
         return len(result.data)
@@ -318,14 +388,16 @@ class SupabaseClient:
         query_embedding: list[float],
         subject_id: UUID,
         class_id: UUID,
+        school_id: UUID,
         limit: int = 5,
         threshold: float = 0.7
     ) -> list[SimilarityResult]:
-        """Perform similarity search using pgvector."""
+        """Perform similarity search using pgvector, scoped to a school."""
         result = self.client.rpc("match_embeddings", {
             "query_embedding": query_embedding,
             "match_subject_id": str(subject_id),
             "match_class_id": str(class_id),
+            "match_school_id": str(school_id),
             "match_count": limit,
             "match_threshold": threshold,
         }).execute()

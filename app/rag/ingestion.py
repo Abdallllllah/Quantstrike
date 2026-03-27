@@ -4,7 +4,7 @@ Document Ingestion Service - Handles processing and indexing of educational cont
 This service coordinates:
 - Creating document metadata records
 - Loading and chunking PDF files
-- Generating embeddings and storing them in the class-scoped vector store
+- Generating embeddings and storing them in the school+class-scoped vector store
 - Tracking indexing status
 """
 import os
@@ -36,15 +36,17 @@ class IngestionService:
     async def ingest_document(
         self, 
         file_path: str, 
+        school_id: str,
         subject_id: str, 
         class_id: str,
         doc_type: str = "notes"
     ) -> Tuple[bool, str]:
         """
-        Process a PDF document and add it to the class-scoped vector store.
+        Process a PDF document and add it to the school+class-scoped vector store.
         
         Args:
             file_path: Path to the PDF file
+            school_id: UUID of the school (for data isolation)
             subject_id: UUID of the subject
             class_id: UUID of the class
             doc_type: Type of document (notes, examples, etc.)
@@ -58,11 +60,13 @@ class IngestionService:
             if not path.exists():
                 return False, f"File not found: {file_path}"
             
+            sch_uuid = UUID(school_id)
             s_uuid = UUID(subject_id)
             c_uuid = UUID(class_id)
             
             # 2. Create document record in database
             doc_create = DocumentCreate(
+                school_id=sch_uuid,
                 subject_id=s_uuid,
                 class_id=c_uuid,
                 filename=path.name,
@@ -77,8 +81,6 @@ class IngestionService:
                 # Check if bucket exists/upload
                 success_stor, result_stor = storage.upload_file(file_path)
                 if success_stor:
-                    # Update document record with storage URL if we had a field for it
-                    # For now, we just ensure it's in the bucket
                     print(f"Cloud backup successful for {path.name}")
             except Exception as se:
                 print(f"Cloud backup failed (non-fatal): {se}")
@@ -92,16 +94,16 @@ class IngestionService:
             
             chunks = self._text_splitter.split_documents(pages)
             
-            # 4. Prepare vector store
+            # 5. Prepare vector store (school-scoped)
             vectorstore = SupabaseVectorStore(
                 supabase=self._supabase,
+                school_id=sch_uuid,
                 subject_id=s_uuid,
                 class_id=c_uuid,
                 embeddings=get_embeddings()
             )
             
-            # 5. Add chunks to vector store
-            # The SupabaseVectorStore implementation handles embeddings and storage
+            # 6. Add chunks to vector store
             texts = [chunk.page_content for chunk in chunks]
             metadatas = [
                 {
@@ -118,7 +120,7 @@ class IngestionService:
                 document_id=doc_record.id
             )
             
-            # 6. Update document status
+            # 7. Update document status
             self._supabase.update_document_indexed(
                 doc_id=doc_record.id,
                 chunk_count=len(chunks)

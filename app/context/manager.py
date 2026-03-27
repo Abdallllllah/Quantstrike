@@ -73,7 +73,7 @@ class ContextManager:
     Features:
     - Loads conversation history from Supabase
     - Caches recent contexts for fast access
-    - Subject and class-aware history retrieval
+    - School, subject, and class-aware history retrieval
     """
     
     def __init__(
@@ -87,26 +87,28 @@ class ContextManager:
     
     def _make_cache_key(
         self, 
-        user_id: UUID, 
+        user_id: UUID,
+        school_id: UUID,
         subject_id: UUID, 
         class_id: UUID
     ) -> str:
-        """Create cache key from context identifiers."""
-        return f"{user_id}:{subject_id}:{class_id}"
+        """Create cache key from context identifiers (includes school for isolation)."""
+        return f"{user_id}:{school_id}:{subject_id}:{class_id}"
     
     def get_history(
         self,
         user_id: UUID,
+        school_id: UUID,
         subject_id: UUID,
         class_id: UUID,
         limit: int = 10,
     ) -> list[Message]:
         """
-        Get conversation history for a user in a specific subject/class.
+        Get conversation history for a user in a specific school/subject/class.
         
         Uses cache for fast repeated access.
         """
-        cache_key = self._make_cache_key(user_id, subject_id, class_id)
+        cache_key = self._make_cache_key(user_id, school_id, subject_id, class_id)
         
         # Check cache
         cached = self._cache.get(cache_key)
@@ -116,6 +118,7 @@ class ContextManager:
         # Fetch from database
         messages = self._supabase.get_conversation_history(
             user_id=user_id,
+            school_id=school_id,
             subject_id=subject_id,
             class_id=class_id,
             limit=limit,
@@ -129,11 +132,12 @@ class ContextManager:
     def invalidate(
         self,
         user_id: UUID,
+        school_id: UUID,
         subject_id: UUID,
         class_id: UUID,
     ):
         """Invalidate cache for a specific context."""
-        cache_key = self._make_cache_key(user_id, subject_id, class_id)
+        cache_key = self._make_cache_key(user_id, school_id, subject_id, class_id)
         self._cache.invalidate(cache_key)
     
     def invalidate_user(self, user_id: UUID):

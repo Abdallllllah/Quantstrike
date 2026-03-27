@@ -2,7 +2,7 @@
 Supabase Vector Store wrapper for LangChain compatibility.
 
 This provides a LangChain-compatible vector store backed by 
-Supabase pgvector for class-scoped similarity search.
+Supabase pgvector for school+class-scoped similarity search.
 """
 from typing import Any, Optional
 from uuid import UUID
@@ -19,19 +19,21 @@ class SupabaseVectorStore(VectorStore):
     """
     LangChain-compatible vector store using Supabase pgvector.
     
-    This store is scoped to a specific subject and class, ensuring
-    that all queries only retrieve documents from that scope.
+    This store is scoped to a specific school, subject, and class,
+    ensuring that all queries only retrieve documents from that scope.
     """
     
     def __init__(
         self,
         supabase: SupabaseClient,
+        school_id: UUID,
         subject_id: UUID,
         class_id: UUID,
         embeddings: Embeddings,
         similarity_threshold: float = 0.2,
     ):
         self._supabase = supabase
+        self._school_id = school_id
         self._subject_id = subject_id
         self._class_id = class_id
         self._embeddings = embeddings
@@ -73,6 +75,7 @@ class SupabaseVectorStore(VectorStore):
             
             embeddings_to_save.append(EmbeddingCreate(
                 document_id=document_id or UUID("00000000-0000-0000-0000-000000000000"),
+                school_id=self._school_id,
                 subject_id=self._subject_id,
                 class_id=self._class_id,
                 content=text,
@@ -95,7 +98,7 @@ class SupabaseVectorStore(VectorStore):
         **kwargs
     ) -> list[Document]:
         """
-        Perform similarity search.
+        Perform similarity search scoped to school+subject+class.
         
         Args:
             query: Query text
@@ -107,11 +110,12 @@ class SupabaseVectorStore(VectorStore):
         # Generate query embedding
         query_vector = self._embeddings.embed_query(query)
         
-        # Search in Supabase
+        # Search in Supabase (school-scoped)
         results = self._supabase.similarity_search(
             query_embedding=query_vector,
             subject_id=self._subject_id,
             class_id=self._class_id,
+            school_id=self._school_id,
             limit=k,
             threshold=self._similarity_threshold,
         )
@@ -151,6 +155,7 @@ class SupabaseVectorStore(VectorStore):
             query_embedding=query_vector,
             subject_id=self._subject_id,
             class_id=self._class_id,
+            school_id=self._school_id,
             limit=k,
             threshold=self._similarity_threshold,
         )
@@ -205,16 +210,18 @@ class SupabaseVectorStore(VectorStore):
     ) -> "SupabaseVectorStore":
         """Create vector store from texts (required by base class)."""
         supabase = kwargs.get("supabase")
+        school_id = kwargs.get("school_id")
         subject_id = kwargs.get("subject_id")
         class_id = kwargs.get("class_id")
         
-        if not all([supabase, subject_id, class_id]):
+        if not all([supabase, school_id, subject_id, class_id]):
             raise ValueError(
-                "supabase, subject_id, and class_id are required kwargs"
+                "supabase, school_id, subject_id, and class_id are required kwargs"
             )
         
         store = cls(
             supabase=supabase,
+            school_id=school_id,
             subject_id=subject_id,
             class_id=class_id,
             embeddings=embedding,
