@@ -80,13 +80,31 @@ class SupabaseClient:
         return [self._to_school(row) for row in result.data]
     
     def get_school_by_slug(self, slug: str) -> Optional[School]:
-        """Get school by slug."""
+        """Get school by slug (case-insensitive) or by name."""
+        # Try exact match
         result = self.client.table("schools").select("*").eq(
             "slug", slug
         ).execute()
         
         if result.data and len(result.data) > 0:
             return self._to_school(result.data[0])
+        
+        # Try lowercase
+        result = self.client.table("schools").select("*").eq(
+            "slug", slug.lower()
+        ).execute()
+        
+        if result.data and len(result.data) > 0:
+            return self._to_school(result.data[0])
+        
+        # Try matching by name
+        result = self.client.table("schools").select("*").ilike(
+            "name", slug
+        ).execute()
+        
+        if result.data and len(result.data) > 0:
+            return self._to_school(result.data[0])
+        
         return None
     
     def get_school_by_id(self, school_id: UUID) -> Optional[School]:
@@ -188,13 +206,31 @@ class SupabaseClient:
         return [self._to_subject(row) for row in result.data]
     
     def get_subject_by_slug(self, slug: str) -> Optional[Subject]:
-        """Get subject by slug."""
+        """Get subject by slug (case-insensitive) or by name."""
+        # Try exact match first
         result = self.client.table("subjects").select("*").eq(
             "slug", slug
         ).execute()
         
         if result.data and len(result.data) > 0:
             return self._to_subject(result.data[0])
+        
+        # Try lowercase
+        result = self.client.table("subjects").select("*").eq(
+            "slug", slug.lower()
+        ).execute()
+        
+        if result.data and len(result.data) > 0:
+            return self._to_subject(result.data[0])
+        
+        # Try matching by name (case-insensitive via ilike)
+        result = self.client.table("subjects").select("*").ilike(
+            "name", slug
+        ).execute()
+        
+        if result.data and len(result.data) > 0:
+            return self._to_subject(result.data[0])
+        
         return None
     
     def get_subject_by_id(self, subject_id: UUID) -> Optional[Subject]:
