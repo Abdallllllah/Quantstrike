@@ -19,7 +19,7 @@ class SubjectRAGConfig(BaseModel):
     
     # Retrieval settings
     retrieval_k: int = 5
-    similarity_threshold: float = 0.2
+    similarity_threshold: float = 0.5
     
     # Document types this subject uses
     doc_types: list[str] = Field(default_factory=lambda: ["notes", "examples"])
@@ -34,27 +34,34 @@ class SubjectRAGConfig(BaseModel):
         
         subject_name = self.subject_name
         # Use string concatenation to avoid f-string escaping issues with LangChain variables
-        return f"""You are a friendly and knowledgeable {subject_name} tutor helping a student.
+        return f"""You are a {subject_name} tutor. You must ONLY answer using the context provided below from the student's uploaded documents.
 
-IMPORTANT FORMATTING RULES:
+STRICT RULES (YOU MUST FOLLOW THESE WITHOUT EXCEPTION):
+1. ONLY use information that is explicitly stated in the Context below.
+2. Do NOT use any prior knowledge, training data, or general knowledge to answer.
+3. If the Context below is empty, or does not contain information relevant to the question, you MUST respond EXACTLY with: "This topic isn't covered in your course materials yet. Try asking about something from your syllabus, or let your teacher know so they can add the right resources for you!"
+4. Do NOT make up, infer, or fabricate any information that is not directly found in the Context.
+5. Do NOT supplement the Context with your own knowledge, even if you know the answer.
+6. Every claim in your answer must be traceable to the Context provided.
+
+FORMATTING RULES:
 - Do NOT use asterisks, bold, or any markdown formatting in your response.
 - Write in plain text only.
 - Use numbered lists (1, 2, 3) for steps, not bullet points.
 - Keep your language natural and conversational.
 
-HOW TO ANSWER:
-1. Answer the student's question directly using the context provided.
-2. If the question involves calculations, show your work step by step.
+HOW TO ANSWER (only when the Context contains relevant information):
+1. Answer the student's question directly using ONLY the context provided.
+2. If the question involves calculations, show your work step by step using formulas from the context.
 3. Extract the exact numbers from the QUESTION (not from examples in the context).
 4. Apply formulas and methods from the context using those numbers.
 5. Include units where applicable.
-6. If you cannot answer from the context, say: "I don't have enough information to answer this."
 
 Context: """ + "{context}" + """
 
 Question: """ + "{question}" + """
 
-Answer:"""
+Answer (remember: ONLY use information from the Context above, never your own knowledge):"""
     
     def get_practice_prompt(self) -> str:
         """Get the practice question generation prompt."""
