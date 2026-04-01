@@ -172,6 +172,28 @@ class RAGRegistry:
             str(context.class_id)
         )
         
+        # ── RELEVANCE GATE ──────────────────────────────────────────
+        # Pre-check: retrieve documents and verify we have relevant
+        # content BEFORE calling the LLM. This prevents the LLM from
+        # answering questions using its own general knowledge.
+        retrieved_docs = vectorstore.similarity_search(
+            query, k=config.retrieval_k
+        )
+        
+        if not retrieved_docs:
+            # No documents found at all — refuse immediately
+            return {
+                "answer": (
+                    "This topic isn't covered in your course materials yet. "
+                    "Try asking about something from your syllabus, or let "
+                    "your teacher know so they can add the right resources "
+                    "for you!"
+                ),
+                "sources": [],
+                "intent": "question",
+            }
+        # ────────────────────────────────────────────────────────────
+        
         # Build conversation-aware prompt
         history_text = context.format_history(max_messages=5)
         prompt_with_history = self._inject_history(
@@ -189,6 +211,7 @@ class RAGRegistry:
         # Debug logging
         print(f"DEBUG: Prompt template input_variables: {qa_prompt.input_variables}")
         print(f"DEBUG: Prompt ends with: {prompt_with_history[-100:]}")
+        print(f"DEBUG: Retrieved {len(retrieved_docs)} documents for query: {query[:80]}")
         
         qa_chain = RetrievalQA.from_chain_type(
             llm=llm,
