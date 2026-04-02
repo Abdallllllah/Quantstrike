@@ -19,7 +19,7 @@ class SubjectRAGConfig(BaseModel):
     
     # Retrieval settings
     retrieval_k: int = 5
-    similarity_threshold: float = 0.5
+    similarity_threshold: float = 0.3
     
     # Document types this subject uses
     doc_types: list[str] = Field(default_factory=lambda: ["notes", "examples"])
