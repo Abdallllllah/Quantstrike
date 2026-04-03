@@ -1,11 +1,15 @@
 """
-Supabase Vector Store wrapper for LangChain compatibility.
+Supabase Vector Store with Hybrid Retrieval.
 
-This provides a LangChain-compatible vector store backed by 
-Supabase pgvector for school+class-scoped similarity search.
+Industry-standard retrieval pipeline:
+1. Multi-query expansion: generates 3 query variations for better recall
+2. Vector similarity search: semantic matching via pgvector
+3. Keyword text search: exact term matching for precision
+4. Reciprocal Rank Fusion (RRF): merges and ranks results from all sources
 """
 from typing import Any, Optional
 from uuid import UUID
+from collections import defaultdict
 
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
@@ -15,12 +19,45 @@ from app.db.supabase import SupabaseClient
 from app.db.models import EmbeddingCreate
 
 
+def _reciprocal_rank_fusion(
+    result_lists: list[list[Document]],
+    k: int = 60,
+) -> list[Document]:
+    """
+    Reciprocal Rank Fusion (RRF) — industry standard for merging ranked lists.
+    
+    Combines multiple ranked result lists into a single ranking.
+    Each document gets a score of 1/(k + rank) from each list it appears in.
+    Documents appearing in multiple lists get boosted.
+    
+    Args:
+        result_lists: List of ranked document lists
+        k: RRF constant (default 60, from the original paper)
+    
+    Returns:
+        Merged and re-ranked list of documents
+    """
+    scores: dict[str, float] = defaultdict(float)
+    doc_map: dict[str, Document] = {}
+    
+    for result_list in result_lists:
+        for rank, doc in enumerate(result_list):
+            # Use content hash as ID since not all docs have metadata IDs
+            doc_id = doc.metadata.get('id', str(hash(doc.page_content[:100])))
+            scores[doc_id] += 1.0 / (k + rank + 1)
+            doc_map[doc_id] = doc
+    
+    # Sort by RRF score (highest first)
+    sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
+    return [doc_map[doc_id] for doc_id in sorted_ids]
+
+
 class SupabaseVectorStore(VectorStore):
     """
-    LangChain-compatible vector store using Supabase pgvector.
+    LangChain-compatible vector store with hybrid retrieval.
     
-    This store is scoped to a specific school, subject, and class,
-    ensuring that all queries only retrieve documents from that scope.
+    Scoped to a specific school, subject, and class.
+    Uses multi-query + vector + keyword search with RRF ranking.
     """
     
     def __init__(
@@ -30,7 +67,7 @@ class SupabaseVectorStore(VectorStore):
         subject_id: UUID,
         class_id: UUID,
         embeddings: Embeddings,
-        similarity_threshold: float = 0.2,
+        similarity_threshold: float = 0.15,
     ):
         self._supabase = supabase
         self._school_id = school_id
@@ -41,7 +78,6 @@ class SupabaseVectorStore(VectorStore):
     
     @property
     def embeddings(self) -> Embeddings:
-        """Return the embeddings model."""
         return self._embeddings
     
     def add_texts(
@@ -51,24 +87,12 @@ class SupabaseVectorStore(VectorStore):
         document_id: Optional[UUID] = None,
         **kwargs
     ) -> list[str]:
-        """
-        Add texts to the vector store.
-        
-        Args:
-            texts: List of text chunks to add
-            metadatas: Optional metadata for each text
-            document_id: ID of the parent document
-        
-        Returns:
-            List of IDs for the added embeddings
-        """
+        """Add texts to the vector store."""
         if not texts:
             return []
         
-        # Generate embeddings
         vectors = self._embeddings.embed_documents(texts)
         
-        # Prepare embedding records
         embeddings_to_save = []
         for i, (text, vector) in enumerate(zip(texts, vectors)):
             metadata = metadatas[i] if metadatas and i < len(metadatas) else {}
@@ -85,32 +109,51 @@ class SupabaseVectorStore(VectorStore):
                 metadata=metadata,
             ))
         
-        # Save to Supabase
         self._supabase.save_embeddings(embeddings_to_save)
-        
-        # Return placeholder IDs (Supabase generates actual UUIDs)
         return [f"emb_{i}" for i in range(len(texts))]
     
-    def similarity_search(
-        self,
-        query: str,
-        k: int = 5,
-        **kwargs
-    ) -> list[Document]:
+    # ──────────────────────────────────────────────────────────────
+    # RETRIEVAL: Multi-Query + Hybrid Search + RRF
+    # ──────────────────────────────────────────────────────────────
+    
+    def _generate_query_variations(self, query: str) -> list[str]:
         """
-        Perform similarity search scoped to school+subject+class.
+        Multi-query expansion: generate alternative phrasings.
         
-        Args:
-            query: Query text
-            k: Number of results to return
-        
-        Returns:
-            List of matching documents
+        Uses simple rule-based expansion (no LLM call needed).
+        This improves recall by searching with multiple phrasings.
         """
-        # Generate query embedding
+        variations = [query]  # Original query always included
+        
+        q_lower = query.lower().strip().rstrip('?')
+        
+        # Variation 1: Convert question to statement
+        for prefix in ['what is ', 'what are ', 'define ', 'explain ']:
+            if q_lower.startswith(prefix):
+                topic = q_lower[len(prefix):]
+                variations.append(f"{topic} definition")
+                variations.append(f"{topic} is defined as")
+                return variations
+        
+        # Variation 2: For "how" questions
+        if q_lower.startswith('how '):
+            variations.append(q_lower.replace('how ', '', 1))
+            variations.append(f"{q_lower} method")
+            return variations
+        
+        # Variation 3: For calculation questions
+        if any(word in q_lower for word in ['calculate', 'find', 'determine', 'solve']):
+            variations.append(f"formula for {q_lower}")
+            return variations
+        
+        # Default: add "definition" variation
+        variations.append(f"{q_lower} definition explanation")
+        return variations
+    
+    def _vector_search(self, query: str, k: int = 10) -> list[Document]:
+        """Semantic vector similarity search via pgvector."""
         query_vector = self._embeddings.embed_query(query)
         
-        # Search in Supabase (school-scoped)
         results = self._supabase.similarity_search(
             query_embedding=query_vector,
             subject_id=self._subject_id,
@@ -120,7 +163,6 @@ class SupabaseVectorStore(VectorStore):
             threshold=self._similarity_threshold,
         )
         
-        # Convert to LangChain documents
         documents = []
         for result in results:
             doc = Document(
@@ -130,6 +172,7 @@ class SupabaseVectorStore(VectorStore):
                     "page_number": result.page_number,
                     "chunk_index": result.chunk_index,
                     "similarity": result.similarity,
+                    "search_type": "vector",
                     **result.metadata,
                 }
             )
@@ -137,18 +180,139 @@ class SupabaseVectorStore(VectorStore):
         
         return documents
     
+    def _keyword_search(self, query: str, k: int = 5) -> list[Document]:
+        """
+        Keyword-based text search for precision.
+        Catches chunks that vector search misses due to embedding dilution.
+        """
+        try:
+            stop_words = {
+                'what', 'is', 'the', 'a', 'an', 'how', 'does', 'do', 'can',
+                'explain', 'define', 'tell', 'me', 'about', 'of', 'in', 'and',
+                'or', 'to', 'for', 'are', 'was', 'were', 'be', 'been', 'with',
+                'this', 'that', 'these', 'it', 'its', 'by', 'on', 'at', 'from',
+            }
+            words = [w.strip('?.,!') for w in query.lower().split()]
+            keywords = [w for w in words if w not in stop_words and len(w) > 2]
+            
+            if not keywords:
+                return []
+            
+            # Strategy: search for each keyword individually and combine
+            all_results = []
+            
+            # Search 1: All keywords together (most specific)
+            full_pattern = '%'.join(keywords)
+            result = self._supabase.client.table('embeddings').select(
+                'id, content, page_number, chunk_index, metadata'
+            ).eq(
+                'subject_id', str(self._subject_id)
+            ).eq(
+                'class_id', str(self._class_id)
+            ).eq(
+                'school_id', str(self._school_id)
+            ).ilike(
+                'content', f'%{full_pattern}%'
+            ).limit(k).execute()
+            
+            seen_ids = set()
+            for row in result.data:
+                doc = Document(
+                    page_content=row['content'],
+                    metadata={
+                        'id': str(row['id']),
+                        'page_number': row.get('page_number'),
+                        'chunk_index': row.get('chunk_index'),
+                        'search_type': 'keyword_all',
+                        **(row.get('metadata') or {}),
+                    }
+                )
+                all_results.append(doc)
+                seen_ids.add(str(row['id']))
+            
+            # Search 2: Each keyword phrase (for multi-word concepts like "potential energy")
+            if len(keywords) >= 2:
+                for i in range(len(keywords) - 1):
+                    phrase = f"{keywords[i]} {keywords[i+1]}"
+                    if len(phrase) > 5:  # Skip very short phrases
+                        result2 = self._supabase.client.table('embeddings').select(
+                            'id, content, page_number, chunk_index, metadata'
+                        ).eq(
+                            'subject_id', str(self._subject_id)
+                        ).eq(
+                            'class_id', str(self._class_id)
+                        ).eq(
+                            'school_id', str(self._school_id)
+                        ).ilike(
+                            'content', f'%{phrase}%'
+                        ).limit(k).execute()
+                        
+                        for row in result2.data:
+                            if str(row['id']) not in seen_ids:
+                                doc = Document(
+                                    page_content=row['content'],
+                                    metadata={
+                                        'id': str(row['id']),
+                                        'page_number': row.get('page_number'),
+                                        'chunk_index': row.get('chunk_index'),
+                                        'search_type': 'keyword_phrase',
+                                        **(row.get('metadata') or {}),
+                                    }
+                                )
+                                all_results.append(doc)
+                                seen_ids.add(str(row['id']))
+            
+            return all_results[:k * 2]
+        except Exception as e:
+            print(f"Keyword search error: {e}")
+            return []
+    
+    def similarity_search(
+        self,
+        query: str,
+        k: int = 5,
+        **kwargs
+    ) -> list[Document]:
+        """
+        Industry-standard hybrid retrieval pipeline:
+        
+        1. Generate query variations (multi-query)
+        2. Run vector search for each variation
+        3. Run keyword search for precision
+        4. Merge all results with Reciprocal Rank Fusion (RRF)
+        5. Return top-k ranked results
+        """
+        # 1. Generate query variations
+        queries = self._generate_query_variations(query)
+        
+        # 2. Vector search with each query variation
+        all_result_lists = []
+        for q in queries:
+            vector_results = self._vector_search(q, k=k)
+            if vector_results:
+                all_result_lists.append(vector_results)
+        
+        # 3. Keyword search (original query only)
+        keyword_results = self._keyword_search(query, k=k)
+        if keyword_results:
+            all_result_lists.append(keyword_results)
+        
+        if not all_result_lists:
+            return []
+        
+        # 4. Reciprocal Rank Fusion
+        fused = _reciprocal_rank_fusion(all_result_lists, k=60)
+        
+        # 5. Return top results
+        return fused[:k * 2]
+    
     def similarity_search_with_score(
         self,
         query: str,
         k: int = 5,
         **kwargs
     ) -> list[tuple[Document, float]]:
-        """
-        Perform similarity search with scores.
-        
-        Returns:
-            List of (document, score) tuples
-        """
+        """Perform similarity search with scores."""
         query_vector = self._embeddings.embed_query(query)
         
         results = self._supabase.similarity_search(
@@ -176,7 +340,7 @@ class SupabaseVectorStore(VectorStore):
         return docs_with_scores
     
     def as_retriever(self, **kwargs) -> "SupabaseRetriever":
-        """Get a retriever for this vector store."""
+        """Get a retriever that uses the full hybrid pipeline."""
         from langchain_core.retrievers import BaseRetriever
         from langchain_core.callbacks import CallbackManagerForRetrieverRun
         

@@ -164,7 +164,13 @@ class RAGRegistry:
         context: ConversationContext,
         **kwargs
     ) -> dict[str, Any]:
-        """Handle a question intent using the RAG pipeline."""
+        """
+        Handle a question using the hybrid retrieval pipeline.
+        
+        Key improvement: retrieves docs ONCE with the full hybrid pipeline
+        (multi-query + vector + keyword + RRF) and feeds them directly
+        to the LLM. No double-retrieval.
+        """
         config = self.get_subject_config(str(context.subject_id))
         vectorstore = self.get_vectorstore(
             str(context.school_id),
@@ -172,16 +178,12 @@ class RAGRegistry:
             str(context.class_id)
         )
         
-        # ── RELEVANCE GATE ──────────────────────────────────────────
-        # Pre-check: retrieve documents and verify we have relevant
-        # content BEFORE calling the LLM. This prevents the LLM from
-        # answering questions using its own general knowledge.
+        # ── SINGLE HYBRID RETRIEVAL ────────────────────────────────
         retrieved_docs = vectorstore.similarity_search(
             query, k=config.retrieval_k
         )
         
         if not retrieved_docs:
-            # No documents found at all — refuse immediately
             return {
                 "answer": (
                     "This topic isn't covered in your course materials yet. "
@@ -192,45 +194,41 @@ class RAGRegistry:
                 "sources": [],
                 "intent": "question",
             }
-        # ────────────────────────────────────────────────────────────
         
-        # Build conversation-aware prompt
+        # ── BUILD CONTEXT FROM RETRIEVED DOCS ──────────────────────
+        # Join all retrieved chunks into a single context string
+        context_text = "\n\n---\n\n".join(
+            doc.page_content for doc in retrieved_docs
+        )
+        
+        # Build prompt with history
         history_text = context.format_history(max_messages=5)
-        prompt_with_history = self._inject_history(
-            config.get_qa_prompt(), 
-            history_text
-        )
+        prompt_template = config.get_qa_prompt()
+        if history_text:
+            prompt_template = self._inject_history(prompt_template, history_text)
         
-        llm = get_llm()
-        retriever = vectorstore.as_retriever(
-            search_kwargs={"k": config.retrieval_k}
-        )
-        
-        qa_prompt = PromptTemplate.from_template(prompt_with_history)
+        # Fill in the template directly (no RetrievalQA needed)
+        filled_prompt = prompt_template.replace("{context}", context_text)
+        filled_prompt = filled_prompt.replace("{question}", query)
         
         # Debug logging
-        print(f"DEBUG: Prompt template input_variables: {qa_prompt.input_variables}")
-        print(f"DEBUG: Prompt ends with: {prompt_with_history[-100:]}")
-        print(f"DEBUG: Retrieved {len(retrieved_docs)} documents for query: {query[:80]}")
+        print(f"DEBUG: Retrieved {len(retrieved_docs)} docs for: {query[:80]}")
+        print(f"DEBUG: Context length: {len(context_text)} chars")
         
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=retriever,
-            return_source_documents=True,
-            chain_type_kwargs={"prompt": qa_prompt}
-        )
-        
-        result = qa_chain.invoke({"query": query})
+        # ── LLM CALL ──────────────────────────────────────────────
+        llm = get_llm()
+        response = llm.invoke(filled_prompt)
+        answer = response.content if hasattr(response, 'content') else str(response)
         
         # Extract unique sources
         sources = list(set(
             doc.metadata.get("source", "Unknown")
-            for doc in result.get("source_documents", [])
+            for doc in retrieved_docs
+            if doc.metadata.get("source")
         ))
         
         return {
-            "answer": result["result"],
+            "answer": answer,
             "sources": sources,
             "intent": "question",
         }

@@ -16,7 +16,7 @@ import os
 import shutil
 from pathlib import Path
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_groq import ChatGroq
@@ -28,7 +28,7 @@ load_dotenv()
 
 # Configuration (same as original)
 DB_PATH = "vectorstore"
-EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL_NAME = "text-embedding-3-large"
 GROQ_MODEL_NAME = "llama-3.3-70b-versatile"
 
 # Singletons
@@ -44,15 +44,22 @@ def get_llm():
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             raise ValueError("GROQ_API_KEY not found in environment variables")
-        _llm = ChatGroq(model=GROQ_MODEL_NAME, groq_api_key=api_key, temperature=0.3)
+        _llm = ChatGroq(model=GROQ_MODEL_NAME, groq_api_key=api_key, temperature=0.1)
     return _llm
 
 
 def get_embeddings():
-    """Get or create embeddings model."""
+    """Get or create embeddings model (OpenAI text-embedding-3-large)."""
     global _embeddings
     if _embeddings is None:
-        _embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not found in environment variables")
+        _embeddings = OpenAIEmbeddings(
+            model=EMBEDDING_MODEL_NAME,
+            openai_api_key=api_key,
+            dimensions=1536,
+        )
     return _embeddings
 
 
