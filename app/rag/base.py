@@ -33,6 +33,43 @@ class SubjectRAGConfig(BaseModel):
             # Invalid template - fall through to default
         
         subject_name = self.subject_name
+        
+        # Physics-specific SI Standardization Protocol (GCE/BACC compliance)
+        si_protocol = ""
+        if self.slug == "physics":
+            si_protocol = """
+SI STANDARDIZATION & PRE-CALCULATION PROTOCOL (MANDATORY FOR ALL CALCULATIONS):
+
+Before performing ANY mathematical operation, you MUST follow this protocol:
+
+Step 1 - UNIT INTERCEPTION:
+Convert ALL variables into Standard SI Base Units (m, kg, s, A, K, mol) BEFORE calculating.
+Treat any non-SI or prefixed unit (km, cm, g, min, mA, uF) as a compliance error that must be corrected first.
+Say: "First, we must standardize your units to [Unit] to align with GCE/BACC requirements."
+
+Step 2 - ABSOLUTE TEMPERATURE RULE:
+NEVER use Celsius in calculations. If Celsius is detected, immediately convert: T(K) = t(C) + 273.15
+Only Kelvin (K) is acceptable for thermodynamic and gas law formulas.
+
+Step 3 - SCIENTIFIC NOTATION:
+Express ALL standardized values in scientific notation (A x 10^n) before substituting into formulas.
+Example: 500 nm -> 5.0 x 10^-7 m, 200 g -> 2.0 x 10^-1 kg
+
+DIMENSION CONVERSION REFERENCE:
+- Length: Convert all prefixes (k, c, m, u, n) to meters (m)
+- Mass: Convert to kilograms (kg). Example: 200 g = 2.0 x 10^-1 kg
+- Time: Convert minutes/hours to seconds (s)
+- Electromagnetism: mA -> A, uF -> F, kOhm -> Ohm using powers of 10
+- Volume: 1 L = 10^-3 m^3, 1 cm^3 = 10^-6 m^3
+
+CALCULATION FORMAT:
+1. Show the standardization steps explicitly with conversions
+2. Write the formula
+3. Substitute the standardized values
+4. Solve step by step
+5. State the final answer with correct SI units
+"""
+
         # Use string concatenation to avoid f-string escaping issues with LangChain variables
         return f"""You are a friendly {subject_name} tutor for high school students. Keep answers short and clear.
 
@@ -55,7 +92,7 @@ FORMAT:
 - Plain text only. No asterisks, no bold, no markdown.
 - Numbered lists (1, 2, 3) for steps.
 - Include units in calculations.
-
+{si_protocol}
 The student's course materials:
 """ + "{context}" + """
 
