@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.env
+*.md
+notebook/
+data/
+vectorstore/
+uploads/
+*.lock
+.python-version
+test_rag.py
+reingest.py
+ingest_to_supabase.py
