@@ -19,7 +19,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
@@ -29,7 +29,7 @@ load_dotenv()
 # Configuration (same as original)
 DB_PATH = "vectorstore"
 EMBEDDING_MODEL_NAME = "text-embedding-3-large"
-GROQ_MODEL_NAME = "llama-3.3-70b-versatile"
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 # Singletons
 _vectorstore = None
@@ -38,13 +38,17 @@ _llm = None
 
 
 def get_llm():
-    """Get or create LLM instance."""
+    """Get or create LLM instance (Google Gemini)."""
     global _llm
     if _llm is None:
-        api_key = os.getenv("GROQ_API_KEY")
+        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         if not api_key:
-            raise ValueError("GROQ_API_KEY not found in environment variables")
-        _llm = ChatGroq(model=GROQ_MODEL_NAME, groq_api_key=api_key, temperature=0.1)
+            raise ValueError("GOOGLE_API_KEY (or GEMINI_API_KEY) not found in environment variables")
+        _llm = ChatGoogleGenerativeAI(
+            model=GEMINI_MODEL_NAME,
+            google_api_key=api_key,
+            temperature=0.1,
+        )
     return _llm
 
 
