@@ -67,7 +67,7 @@ class SupabaseVectorStore(VectorStore):
         subject_id: UUID,
         class_id: UUID,
         embeddings: Embeddings,
-        similarity_threshold: float = 0.15,
+        similarity_threshold: float = 0.10,
     ):
         self._supabase = supabase
         self._school_id = school_id
@@ -75,6 +75,7 @@ class SupabaseVectorStore(VectorStore):
         self._class_id = class_id
         self._embeddings = embeddings
         self._similarity_threshold = similarity_threshold
+        self._expansion_cache: dict[str, list[str]] = {}
     
     @property
     def embeddings(self) -> Embeddings:
@@ -267,6 +268,51 @@ class SupabaseVectorStore(VectorStore):
             print(f"Keyword search error: {e}")
             return []
     
+    def _llm_expand_query(self, query: str) -> list[str]:
+        """
+        LLM-based query expansion (paraphrase generation).
+
+        Used as a FALLBACK when the cheap rule-based pass returns nothing,
+        to catch cases where the student's wording differs from the textbook
+        wording (for example "fundamental forces" vs "basic forces").
+
+        Cached per query string so repeated identical questions skip the LLM call.
+        Returns a list of paraphrased queries (may be empty if the LLM call fails).
+        """
+        if query in self._expansion_cache:
+            return self._expansion_cache[query]
+
+        try:
+            # Lazy import to avoid circulars and to skip the cost when not needed
+            from app.rag_legacy import get_llm
+            llm = get_llm()
+            prompt = (
+                "You rewrite student questions for a textbook search engine. "
+                "Generate 3 alternative phrasings of the question below that mean the SAME thing. "
+                "Aggressively swap synonyms a Cameroon GCE A-Level textbook might use. "
+                "Examples of good swaps: fundamental <-> basic <-> primary <-> elementary; "
+                "speed <-> velocity (when context allows); cell wall <-> plasma membrane (only if the student confused them); "
+                "graph <-> diagram <-> plot; equation <-> formula. "
+                "Return ONLY the 3 alternative phrasings, one per line, no numbering, no quotes, no explanation, no preamble.\n\n"
+                f"Question: {query}\n\n"
+                "Three alternative phrasings:"
+            )
+            response = llm.invoke(prompt)
+            text = response.content if hasattr(response, "content") else str(response)
+            lines = [
+                ln.strip().lstrip("-*0123456789. )").strip().strip('"\'')
+                for ln in text.strip().split("\n")
+                if ln.strip()
+            ]
+            # Drop any line that is just the original question or empty
+            paraphrases = [ln for ln in lines if ln and ln.lower() != query.lower()][:3]
+            self._expansion_cache[query] = paraphrases
+            return paraphrases
+        except Exception as e:
+            print(f"LLM query expansion failed (non-fatal): {e}")
+            self._expansion_cache[query] = []
+            return []
+
     def similarity_search(
         self,
         query: str,
@@ -274,37 +320,65 @@ class SupabaseVectorStore(VectorStore):
         **kwargs
     ) -> list[Document]:
         """
-        Industry-standard hybrid retrieval pipeline:
-        
-        1. Generate query variations (multi-query)
-        2. Run vector search for each variation
-        3. Run keyword search for precision
-        4. Merge all results with Reciprocal Rank Fusion (RRF)
-        5. Return top-k ranked results
+        Hybrid retrieval pipeline with staged fallback for paraphrase mismatch:
+
+        1. Rule-based query variations + vector search.
+        2. Keyword search on the original query.
+        3. RRF merge. If non-empty, return.
+        4. FALLBACK A: LLM-based paraphrase expansion + vector search per paraphrase.
+        5. FALLBACK B: drop the similarity threshold to 0 and re-run vector search
+           on the original query (last-chance broad sweep).
+        6. Only return [] if all three stages found nothing.
         """
-        # 1. Generate query variations
+        # ── STAGE 1+2+3: Cheap pass (rule-based variations + keyword) ─────────
         queries = self._generate_query_variations(query)
-        
-        # 2. Vector search with each query variation
-        all_result_lists = []
+        all_result_lists: list[list[Document]] = []
         for q in queries:
             vector_results = self._vector_search(q, k=k)
             if vector_results:
                 all_result_lists.append(vector_results)
-        
-        # 3. Keyword search (original query only)
+
         keyword_results = self._keyword_search(query, k=k)
         if keyword_results:
             all_result_lists.append(keyword_results)
-        
+
+        if all_result_lists:
+            fused = _reciprocal_rank_fusion(all_result_lists, k=60)
+            return fused[: k * 2]
+
+        # ── STAGE 4: FALLBACK A — LLM paraphrase expansion ────────────────────
+        # Triggered ONLY when the cheap pass found nothing. This catches
+        # paraphrase mismatch (e.g. "fundamental" vs "basic" forces).
+        print(f"DEBUG: cheap retrieval empty for '{query[:80]}', trying LLM paraphrase expansion")
+        paraphrases = self._llm_expand_query(query)
+        for q in paraphrases:
+            vector_results = self._vector_search(q, k=k)
+            if vector_results:
+                all_result_lists.append(vector_results)
+            keyword_results = self._keyword_search(q, k=k)
+            if keyword_results:
+                all_result_lists.append(keyword_results)
+
+        if all_result_lists:
+            fused = _reciprocal_rank_fusion(all_result_lists, k=60)
+            return fused[: k * 2]
+
+        # ── STAGE 5: FALLBACK B — drop threshold to 0, last-chance sweep ─────
+        print(f"DEBUG: paraphrase expansion empty for '{query[:80]}', last-chance sweep with threshold=0")
+        original_threshold = self._similarity_threshold
+        try:
+            self._similarity_threshold = 0.0
+            vector_results = self._vector_search(query, k=k * 2)
+            if vector_results:
+                all_result_lists.append(vector_results)
+        finally:
+            self._similarity_threshold = original_threshold
+
         if not all_result_lists:
             return []
-        
-        # 4. Reciprocal Rank Fusion
+
         fused = _reciprocal_rank_fusion(all_result_lists, k=60)
-        
-        # 5. Return top results
-        return fused[:k * 2]
+        return fused[: k * 2]
     
     def similarity_search_with_score(
         self,
