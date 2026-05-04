@@ -84,7 +84,7 @@ templates = Jinja2Templates(directory="app/templates")
 async def read_root(request: Request):
     if request.method == "HEAD":
         return HTMLResponse(content="", status_code=200)
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 
 @app.post("/api/upload")
