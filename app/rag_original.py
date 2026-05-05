@@ -5,7 +5,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
@@ -15,7 +15,8 @@ load_dotenv()
 # Configuration
 DB_PATH = "vectorstore"
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+OPENROUTER_MODEL_NAME = os.getenv("OPENROUTER_MODEL", "qwen/qwen-2.5-72b-instruct")
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Singleton
 _vectorstore = None
@@ -25,13 +26,18 @@ _llm = None
 def get_llm():
     global _llm
     if _llm is None:
-        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
-            raise ValueError("GOOGLE_API_KEY (or GEMINI_API_KEY) not found in environment variables")
-        _llm = ChatGoogleGenerativeAI(
-            model=GEMINI_MODEL_NAME,
-            google_api_key=api_key,
+            raise ValueError("OPENROUTER_API_KEY not found in environment variables")
+        _llm = ChatOpenAI(
+            model=OPENROUTER_MODEL_NAME,
+            api_key=api_key,
+            base_url=OPENROUTER_BASE_URL,
             temperature=0.3,
+            default_headers={
+                "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "https://quantstrike.app"),
+                "X-Title": os.getenv("OPENROUTER_SITE_NAME", "Quantstrike Tutor"),
+            },
         )
     return _llm
 
