@@ -28,7 +28,7 @@ load_dotenv()
 # Configuration (same as original)
 DB_PATH = "vectorstore"
 EMBEDDING_MODEL_NAME = "text-embedding-3-large"
-OPENROUTER_MODEL_NAME = os.getenv("OPENROUTER_MODEL", "qwen/qwen-2.5-72b-instruct")
+OPENROUTER_MODEL_NAME = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-lite-001")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Singletons
