@@ -15,7 +15,7 @@ load_dotenv()
 # Configuration
 DB_PATH = "vectorstore"
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
-OPENROUTER_MODEL_NAME = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3")
+OPENROUTER_MODEL_NAME = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Singleton
