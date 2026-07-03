@@ -52,6 +52,13 @@ class SchoolCreateRequest(BaseModel):
     )
 
 
+class ClassCreateRequest(BaseModel):
+    """Request body for creating a class under a subject."""
+    name: str = Field(..., description="Class/grade name", example="A-Level")
+    subject: str = Field(..., description="Subject name or slug the class belongs to", example="physics")
+    description: Optional[str] = Field(None, description="Optional description")
+
+
 class RAGQueryResponse(BaseModel):
     """Response body for RAG query endpoint."""
     user_id: str = Field(..., description="The user's identifier")
@@ -83,6 +90,36 @@ Path("uploads").mkdir(exist_ok=True)
 # Include WhatsApp router if available
 if WHATSAPP_ENABLED:
     app.include_router(whatsapp_router)
+
+# ==========================================
+# GATEWAY ROUTERS (merged from quantstrikeController)
+# Master chat, auth, practice, past-paper retrieval, vision/audio extraction.
+# Each router owns its own /api/* prefix. controller.py/extract call other
+# endpoints in THIS app over localhost ($BASE_URL / $PORT), so everything runs
+# as one Render service. The old /api/rag proxy was dropped — the worker's
+# /api/rag above is canonical.
+# ==========================================
+from app.gateway.routes import (
+    controller as gw_controller,
+    authentication as gw_authentication,
+    onboardMultipleUsers as gw_onboard,
+    insertMessage as gw_messages,
+    practice as gw_practice,
+    extract_question_paper_data as gw_extract,
+    search as gw_search,
+    upload as gw_upload,
+    triggerDownload as gw_download,
+    getQuestionFromPicture as gw_vision_questions,
+    speechToText as gw_audio,
+    convertPDFToText as gw_pdf2word,
+)
+
+for _gw in (
+    gw_controller, gw_authentication, gw_onboard, gw_messages, gw_practice,
+    gw_extract, gw_search, gw_upload, gw_download,
+    gw_vision_questions, gw_audio, gw_pdf2word,
+):
+    app.include_router(_gw.router)
 
 # Mount static files (CSS, JS, etc.)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -404,6 +441,53 @@ async def list_classes(subject_id: str):
                 for c in classes
             ]
         })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/classes", status_code=201)
+async def create_class(payload: ClassCreateRequest):
+    """
+    Create a class under a subject (writes to reg_classes).
+
+    Accepts the subject by name or slug — no UUID needed. This is the
+    canonical class-creation endpoint; the old gateway `/api/classes` route
+    (which wrote to a separate Supabase project) was removed in the merge.
+    """
+    try:
+        from app.db.supabase import get_supabase_client
+        client = get_supabase_client()
+
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Class name is required")
+
+        subject_obj = client.get_subject_by_slug(payload.subject)
+        if not subject_obj:
+            raise HTTPException(status_code=404, detail=f"Subject '{payload.subject}' not found")
+
+        created = client.create_class(
+            name=name,
+            subject_id=subject_obj.id,
+            description=payload.description,
+        )
+
+        return JSONResponse(
+            status_code=201,
+            content={
+                "status": "success",
+                "class": {
+                    "id": str(created.id),
+                    "name": created.name,
+                    "subject": subject_obj.name,
+                    "description": created.description,
+                },
+            },
+        )
+    except HTTPException:
+        raise
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Supabase not configured")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

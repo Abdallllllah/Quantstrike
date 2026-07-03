@@ -21,5 +21,7 @@ RUN mkdir -p uploads
 # Expose port
 EXPOSE 8000
 
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application. Shell form so $PORT (set by Render) is honored; the
+# in-process self-calls in the gateway target 127.0.0.1:$PORT, so binding the
+# same port keeps everything on one service.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
