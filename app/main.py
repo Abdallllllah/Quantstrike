@@ -121,6 +121,14 @@ for _gw in (
 ):
     app.include_router(_gw.router)
 
+# ==========================================
+# SCHOOL APP (edu) — school/teacher/student accounts, roles, assignments.
+# Builds on the reg_* multi-tenant tables; students' RAG answers stay scoped
+# to their school via the existing /api/rag isolation.
+# ==========================================
+from app.edu.routes import router as edu_router
+app.include_router(edu_router)
+
 # Mount static files (CSS, JS, etc.)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
