@@ -8,6 +8,7 @@ existing worker endpoints:
 This module adds accounts/roles/enrollment and the assignments feature.
 """
 import re
+import functools
 from datetime import datetime, timezone
 from typing import Optional, List
 
@@ -18,6 +19,21 @@ from app.db.supabase import get_supabase_client
 from app.edu.auth import make_token, get_current_user, require_role
 
 router = APIRouter(prefix="/api/edu", tags=["School App"])
+
+
+def surface_errors(fn):
+    """Turn unexpected exceptions into a 500 that includes the real message,
+    so failures (e.g. a missing migration) are visible to the client instead
+    of an opaque 'Internal Server Error'."""
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await fn(*args, **kwargs)
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001 — deliberately surface the detail
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+    return wrapper
 
 
 # ==========================================================================
@@ -142,6 +158,7 @@ class GradeSubmission(BaseModel):
 # AUTH
 # ==========================================================================
 @router.post("/schools/signup", status_code=201)
+@surface_errors
 async def school_signup(payload: SchoolSignup):
     """Register a school and its first admin (name + phone)."""
     name = payload.admin_name.strip()
@@ -164,6 +181,7 @@ async def school_signup(payload: SchoolSignup):
 
 
 @router.post("/teachers/signup", status_code=201)
+@surface_errors
 async def teacher_signup(payload: TeacherSignup):
     """Register a teacher under an existing school."""
     phone = payload.phone.strip()
@@ -175,6 +193,7 @@ async def teacher_signup(payload: TeacherSignup):
 
 
 @router.post("/students/signup", status_code=201)
+@surface_errors
 async def student_signup(payload: StudentSignup):
     """Self-signup for a student, optionally naming the enrolling teacher."""
     phone = payload.phone.strip()
@@ -194,6 +213,7 @@ async def student_signup(payload: StudentSignup):
 
 
 @router.post("/login")
+@surface_errors
 async def login(payload: LoginRequest):
     """Log in with phone (name optional, verified if provided)."""
     user = _get_user_by_phone(payload.phone.strip())
@@ -205,6 +225,7 @@ async def login(payload: LoginRequest):
 
 
 @router.get("/me")
+@surface_errors
 async def me(user: dict = Depends(get_current_user)):
     return {"user": _public_user(user), "school": _school_dict(user.get("school_id"))}
 
@@ -213,6 +234,7 @@ async def me(user: dict = Depends(get_current_user)):
 # ROSTER / ENROLLMENT
 # ==========================================================================
 @router.post("/students", status_code=201)
+@surface_errors
 async def enroll_student(payload: EnrollStudent, teacher: dict = Depends(require_role("teacher", "school_admin"))):
     """Teacher/admin enrolls a student into their school."""
     phone = payload.phone.strip()
@@ -227,6 +249,7 @@ async def enroll_student(payload: EnrollStudent, teacher: dict = Depends(require
 
 
 @router.get("/students")
+@surface_errors
 async def list_students(mine: bool = False, user: dict = Depends(require_role("teacher", "school_admin"))):
     """List students in the caller's school (mine=true → only those I enrolled)."""
     q = _db().table("reg_users").select("*").eq("role", "student").eq("school_id", user.get("school_id"))
@@ -237,6 +260,7 @@ async def list_students(mine: bool = False, user: dict = Depends(require_role("t
 
 
 @router.get("/teachers")
+@surface_errors
 async def list_teachers(user: dict = Depends(require_role("school_admin"))):
     """School admin lists teachers in the school."""
     res = (
@@ -266,6 +290,7 @@ def _resolve_subject_class(subject: Optional[str], class_level: Optional[str]):
 
 
 @router.post("/assignments", status_code=201)
+@surface_errors
 async def create_assignment(payload: AssignmentCreate, teacher: dict = Depends(require_role("teacher", "school_admin"))):
     """Create an assignment and target students (all school students if none given)."""
     if not payload.title.strip():
@@ -299,6 +324,7 @@ async def create_assignment(payload: AssignmentCreate, teacher: dict = Depends(r
 
 
 @router.get("/assignments")
+@surface_errors
 async def list_assignments(user: dict = Depends(get_current_user)):
     """Teachers/admins see assignments they own; students see ones targeted to them."""
     db = _db()
@@ -322,6 +348,7 @@ async def list_assignments(user: dict = Depends(get_current_user)):
 
 
 @router.get("/assignments/{assignment_id}")
+@surface_errors
 async def get_assignment(assignment_id: str, user: dict = Depends(get_current_user)):
     db = _db()
     res = db.table("reg_assignments").select("*").eq("id", assignment_id).limit(1).execute()
@@ -339,6 +366,7 @@ async def get_assignment(assignment_id: str, user: dict = Depends(get_current_us
 
 
 @router.post("/assignments/{assignment_id}/submit")
+@surface_errors
 async def submit_assignment(assignment_id: str, payload: SubmissionCreate,
                             student: dict = Depends(require_role("student"))):
     db = _db()
@@ -365,6 +393,7 @@ async def submit_assignment(assignment_id: str, payload: SubmissionCreate,
 
 
 @router.get("/assignments/{assignment_id}/submissions")
+@surface_errors
 async def list_submissions(assignment_id: str, teacher: dict = Depends(require_role("teacher", "school_admin"))):
     db = _db()
     res = db.table("reg_assignments").select("teacher_id, school_id").eq("id", assignment_id).limit(1).execute()
@@ -375,6 +404,7 @@ async def list_submissions(assignment_id: str, teacher: dict = Depends(require_r
 
 
 @router.post("/submissions/{submission_id}/grade")
+@surface_errors
 async def grade_submission(submission_id: str, payload: GradeSubmission,
                            teacher: dict = Depends(require_role("teacher", "school_admin"))):
     db = _db()
