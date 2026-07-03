@@ -42,6 +42,16 @@ class RAGQueryRequest(BaseModel):
         populate_by_name = True
 
 
+class SchoolCreateRequest(BaseModel):
+    """Request body for creating a school."""
+    name: str = Field(..., description="School name", example="Greenwood High School")
+    slug: Optional[str] = Field(
+        None,
+        description="URL-safe identifier for data isolation. Auto-generated from name if omitted.",
+        example="greenwood-high",
+    )
+
+
 class RAGQueryResponse(BaseModel):
     """Response body for RAG query endpoint."""
     user_id: str = Field(..., description="The user's identifier")
@@ -292,6 +302,58 @@ async def list_schools():
             "schools": [],
             "error": "Supabase not configured"
         })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/schools", status_code=201)
+async def create_school(school: SchoolCreateRequest):
+    """
+    Register a new school (tenant) for multi-tenant data isolation.
+
+    Provide a `name` and optionally a `slug`. If the slug is omitted it is
+    derived from the name (lowercased, non-alphanumeric runs collapsed to
+    hyphens). Slugs must be unique.
+    """
+    import re
+
+    try:
+        from app.db.supabase import get_supabase_client
+        from app.db.models import SchoolCreate
+        client = get_supabase_client()
+
+        name = school.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="School name is required")
+
+        # Derive slug from name when not supplied.
+        raw_slug = school.slug.strip() if school.slug else name
+        slug = re.sub(r"[^a-z0-9]+", "-", raw_slug.lower()).strip("-")
+        if not slug:
+            raise HTTPException(status_code=400, detail="Could not derive a valid slug from the provided name/slug")
+
+        # Reject duplicate slugs up front for a clean 409 instead of a DB error.
+        if client.get_school_by_slug(slug):
+            raise HTTPException(status_code=409, detail=f"School with slug '{slug}' already exists")
+
+        created = client.create_school(SchoolCreate(name=name, slug=slug))
+
+        return JSONResponse(
+            status_code=201,
+            content={
+                "status": "success",
+                "school": {
+                    "id": str(created.id),
+                    "name": created.name,
+                    "slug": created.slug,
+                    "is_active": created.is_active,
+                },
+            },
+        )
+    except HTTPException:
+        raise
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Supabase not configured")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
