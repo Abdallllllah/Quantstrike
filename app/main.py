@@ -13,8 +13,37 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="Quant AI Tutor",
     description="Multi-Subject AI Tutor RAG System with WhatsApp Integration",
-    version="2.0.0"
+    version="2.0.0",
+    # Serve Swagger/ReDoc assets from cdnjs instead of the default jsdelivr CDN,
+    # which is blocked (403 / ERR_BLOCKED_BY_RESPONSE) on some networks.
+    docs_url=None,
+    redoc_url=None,
 )
+
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
+
+_SWAGGER_JS = "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui-bundle.min.js"
+_SWAGGER_CSS = "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui.min.css"
+_REDOC_JS = "https://cdnjs.cloudflare.com/ajax/libs/redoc/2.1.5/redoc.standalone.min.js"
+
+
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui():
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} — Swagger UI",
+        swagger_js_url=_SWAGGER_JS,
+        swagger_css_url=_SWAGGER_CSS,
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+async def custom_redoc():
+    return get_redoc_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} — ReDoc",
+        redoc_js_url=_REDOC_JS,
+    )
 
 # ==========================
 # ENABLE CORS FOR ALL ORIGINS
