@@ -64,9 +64,18 @@ def _create_user(name: str, phone: str, role: str, school_id: Optional[str],
     return res.data[0]
 
 
-def _auth_response(user: dict, **extra) -> dict:
+def _school_dict(school_id: Optional[str]) -> Optional[dict]:
+    if not school_id:
+        return None
+    res = _db().table("reg_schools").select("id,name,slug").eq("id", school_id).limit(1).execute()
+    return res.data[0] if res.data else None
+
+
+def _auth_response(user: dict, school: Optional[dict] = None) -> dict:
     token = make_token(user["id"], user["role"], user.get("school_id"))
-    return {"token": token, "user": _public_user(user), **extra}
+    if school is None:
+        school = _school_dict(user.get("school_id"))
+    return {"token": token, "user": _public_user(user), "school": school}
 
 
 def _resolve_school(slug_or_name: str):
@@ -197,7 +206,7 @@ async def login(payload: LoginRequest):
 
 @router.get("/me")
 async def me(user: dict = Depends(get_current_user)):
-    return {"user": _public_user(user)}
+    return {"user": _public_user(user), "school": _school_dict(user.get("school_id"))}
 
 
 # ==========================================================================
