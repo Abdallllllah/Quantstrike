@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Bucket name for document storage
-DOCUMENTS_BUCKET = "documents"
+DOCUMENTS_BUCKET = "reg_documents"
 
 
 class StorageClient:

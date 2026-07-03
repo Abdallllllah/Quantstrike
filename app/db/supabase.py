@@ -72,54 +72,54 @@ class SupabaseClient:
     
     def get_all_schools(self, active_only: bool = True) -> list[School]:
         """Get all schools."""
-        query = self.client.table("schools").select("*")
+        query = self.client.table("reg_schools").select("*")
         if active_only:
             query = query.eq("is_active", True)
         result = query.execute()
-        
+
         return [self._to_school(row) for row in result.data]
-    
+
     def get_school_by_slug(self, slug: str) -> Optional[School]:
         """Get school by slug (case-insensitive) or by name."""
         # Try exact match
-        result = self.client.table("schools").select("*").eq(
+        result = self.client.table("reg_schools").select("*").eq(
             "slug", slug
         ).execute()
-        
+
         if result.data and len(result.data) > 0:
             return self._to_school(result.data[0])
-        
+
         # Try lowercase
-        result = self.client.table("schools").select("*").eq(
+        result = self.client.table("reg_schools").select("*").eq(
             "slug", slug.lower()
         ).execute()
-        
+
         if result.data and len(result.data) > 0:
             return self._to_school(result.data[0])
-        
+
         # Try matching by name
-        result = self.client.table("schools").select("*").ilike(
+        result = self.client.table("reg_schools").select("*").ilike(
             "name", slug
         ).execute()
-        
+
         if result.data and len(result.data) > 0:
             return self._to_school(result.data[0])
-        
+
         return None
-    
+
     def get_school_by_id(self, school_id: UUID) -> Optional[School]:
         """Get school by ID."""
-        result = self.client.table("schools").select("*").eq(
+        result = self.client.table("reg_schools").select("*").eq(
             "id", str(school_id)
         ).execute()
-        
+
         if result.data and len(result.data) > 0:
             return self._to_school(result.data[0])
         return None
-    
+
     def create_school(self, school: SchoolCreate) -> School:
         """Create a new school."""
-        result = self.client.table("schools").insert({
+        result = self.client.table("reg_schools").insert({
             "name": school.name,
             "slug": school.slug,
         }).execute()
@@ -132,7 +132,7 @@ class SupabaseClient:
     
     def get_user_by_phone(self, phone_number: str) -> Optional[User]:
         """Get user by phone number."""
-        result = self.client.table("users").select("*").eq(
+        result = self.client.table("reg_users").select("*").eq(
             "phone_number", phone_number
         ).execute()
         
@@ -142,7 +142,7 @@ class SupabaseClient:
     
     def get_user_by_id(self, user_id: UUID) -> Optional[User]:
         """Get user by ID."""
-        result = self.client.table("users").select("*").eq(
+        result = self.client.table("reg_users").select("*").eq(
             "id", str(user_id)
         ).execute()
         
@@ -159,7 +159,7 @@ class SupabaseClient:
         if user.school_id:
             data["school_id"] = str(user.school_id)
         
-        result = self.client.table("users").insert(data).execute()
+        result = self.client.table("reg_users").insert(data).execute()
         
         return User(**result.data[0])
     
@@ -186,7 +186,7 @@ class SupabaseClient:
         if class_id is not None:
             update_data["current_class_id"] = str(class_id)
         
-        result = self.client.table("users").update(update_data).eq(
+        result = self.client.table("reg_users").update(update_data).eq(
             "id", str(user_id)
         ).execute()
         
@@ -198,7 +198,7 @@ class SupabaseClient:
     
     def get_all_subjects(self, active_only: bool = True) -> list[Subject]:
         """Get all subjects."""
-        query = self.client.table("subjects").select("*")
+        query = self.client.table("reg_subjects").select("*")
         if active_only:
             query = query.eq("is_active", True)
         result = query.execute()
@@ -208,7 +208,7 @@ class SupabaseClient:
     def get_subject_by_slug(self, slug: str) -> Optional[Subject]:
         """Get subject by slug (case-insensitive) or by name."""
         # Try exact match first
-        result = self.client.table("subjects").select("*").eq(
+        result = self.client.table("reg_subjects").select("*").eq(
             "slug", slug
         ).execute()
         
@@ -216,7 +216,7 @@ class SupabaseClient:
             return self._to_subject(result.data[0])
         
         # Try lowercase
-        result = self.client.table("subjects").select("*").eq(
+        result = self.client.table("reg_subjects").select("*").eq(
             "slug", slug.lower()
         ).execute()
         
@@ -224,7 +224,7 @@ class SupabaseClient:
             return self._to_subject(result.data[0])
         
         # Try matching by name (case-insensitive via ilike)
-        result = self.client.table("subjects").select("*").ilike(
+        result = self.client.table("reg_subjects").select("*").ilike(
             "name", slug
         ).execute()
         
@@ -235,7 +235,7 @@ class SupabaseClient:
     
     def get_subject_by_id(self, subject_id: UUID) -> Optional[Subject]:
         """Get subject by ID."""
-        result = self.client.table("subjects").select("*").eq(
+        result = self.client.table("reg_subjects").select("*").eq(
             "id", str(subject_id)
         ).execute()
         
@@ -253,7 +253,7 @@ class SupabaseClient:
         active_only: bool = True
     ) -> list[Class]:
         """Get all classes for a subject."""
-        query = self.client.table("classes").select("*").eq(
+        query = self.client.table("reg_classes").select("*").eq(
             "subject_id", str(subject_id)
         )
         if active_only:
@@ -264,7 +264,7 @@ class SupabaseClient:
     
     def get_class_by_id(self, class_id: UUID) -> Optional[Class]:
         """Get class by ID."""
-        result = self.client.table("classes").select("*").eq(
+        result = self.client.table("reg_classes").select("*").eq(
             "id", str(class_id)
         ).execute()
         
@@ -279,7 +279,7 @@ class SupabaseClient:
         description: Optional[str] = None
     ) -> Class:
         """Create a new class."""
-        result = self.client.table("classes").insert({
+        result = self.client.table("reg_classes").insert({
             "name": name,
             "subject_id": str(subject_id),
             "description": description,
@@ -300,7 +300,7 @@ class SupabaseClient:
         limit: int = 10
     ) -> list[Message]:
         """Get recent conversation history for a user."""
-        query = self.client.table("messages").select("*").eq(
+        query = self.client.table("reg_messages").select("*").eq(
             "user_id", str(user_id)
         )
         
@@ -335,7 +335,7 @@ class SupabaseClient:
         if message.class_id:
             data["class_id"] = str(message.class_id)
         
-        result = self.client.table("messages").insert(data).execute()
+        result = self.client.table("reg_messages").insert(data).execute()
         
         return self._to_message(result.data[0])
     
@@ -355,7 +355,7 @@ class SupabaseClient:
         if doc.school_id:
             data["school_id"] = str(doc.school_id)
         
-        result = self.client.table("documents").insert(data).execute()
+        result = self.client.table("reg_documents").insert(data).execute()
         
         return self._to_document(result.data[0])
     
@@ -365,7 +365,7 @@ class SupabaseClient:
         chunk_count: int
     ) -> Document:
         """Mark document as indexed with chunk count."""
-        result = self.client.table("documents").update({
+        result = self.client.table("reg_documents").update({
             "is_indexed": True,
             "chunk_count": chunk_count,
         }).eq("id", str(doc_id)).execute()
@@ -379,7 +379,7 @@ class SupabaseClient:
         school_id: Optional[UUID] = None,
     ) -> list[Document]:
         """Get all documents for a class, optionally scoped to a school."""
-        query = self.client.table("documents").select("*").eq(
+        query = self.client.table("reg_documents").select("*").eq(
             "subject_id", str(subject_id)
         ).eq(
             "class_id", str(class_id)
@@ -398,7 +398,7 @@ class SupabaseClient:
         class_id: Optional[UUID] = None,
     ) -> list[Document]:
         """Get all documents for a school, optionally filtered by subject/class."""
-        query = self.client.table("documents").select("*").eq(
+        query = self.client.table("reg_documents").select("*").eq(
             "school_id", str(school_id)
         )
         if subject_id:
@@ -415,7 +415,7 @@ class SupabaseClient:
         # Delete embeddings first
         self.delete_embeddings_by_document(document_id)
         # Delete document record
-        self.client.table("documents").delete().eq(
+        self.client.table("reg_documents").delete().eq(
             "id", str(document_id)
         ).execute()
         return True
@@ -445,7 +445,7 @@ class SupabaseClient:
                 row["school_id"] = str(emb.school_id)
             data.append(row)
         
-        result = self.client.table("embeddings").insert(data).execute()
+        result = self.client.table("reg_embeddings").insert(data).execute()
         return len(result.data)
     
     def similarity_search(
@@ -458,7 +458,7 @@ class SupabaseClient:
         threshold: float = 0.7
     ) -> list[SimilarityResult]:
         """Perform similarity search using pgvector, scoped to a school."""
-        result = self.client.rpc("match_embeddings", {
+        result = self.client.rpc("reg_match_embeddings", {
             "query_embedding": query_embedding,
             "match_subject_id": str(subject_id),
             "match_class_id": str(class_id),
@@ -471,7 +471,7 @@ class SupabaseClient:
     
     def delete_embeddings_by_document(self, document_id: UUID) -> int:
         """Delete all embeddings for a document."""
-        result = self.client.rpc("delete_document_embeddings", {
+        result = self.client.rpc("reg_delete_document_embeddings", {
             "doc_id": str(document_id)
         }).execute()
         

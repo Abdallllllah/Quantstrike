@@ -21,7 +21,7 @@ from app.db.supabase import get_supabase_client
 from app.rag.ingestion import get_ingestion_service
 
 
-DOCUMENTS_BUCKET = "documents"
+DOCUMENTS_BUCKET = "reg_documents"
 
 
 async def reingest_all():
@@ -29,7 +29,7 @@ async def reingest_all():
     client = get_supabase_client()
     
     # 1. Get all documents from the database
-    result = client.client.table("documents").select("*").execute()
+    result = client.client.table("reg_documents").select("*").execute()
     documents = result.data
     
     if not documents:
@@ -52,7 +52,7 @@ async def reingest_all():
     
     # 4. Clear old embeddings (migration should have done this, but just in case)
     try:
-        client.client.table("embeddings").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+        client.client.table("reg_embeddings").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
         print("Cleared old embeddings.\n")
     except Exception as e:
         print(f"Note: Could not clear embeddings: {e}\n")
@@ -113,10 +113,10 @@ async def reingest_all():
         # Delete the old document record and create fresh
         try:
             # Delete old doc record (and its embeddings via cascade/manual)
-            client.client.table("embeddings").delete().eq(
+            client.client.table("reg_embeddings").delete().eq(
                 "document_id", doc_id
             ).execute()
-            client.client.table("documents").delete().eq(
+            client.client.table("reg_documents").delete().eq(
                 "id", doc_id
             ).execute()
         except Exception as e:

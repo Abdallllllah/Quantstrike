@@ -204,7 +204,7 @@ class SupabaseVectorStore(VectorStore):
             
             # Search 1: All keywords together (most specific)
             full_pattern = '%'.join(keywords)
-            result = self._supabase.client.table('embeddings').select(
+            result = self._supabase.client.table('reg_embeddings').select(
                 'id, content, page_number, chunk_index, metadata'
             ).eq(
                 'subject_id', str(self._subject_id)
@@ -236,7 +236,7 @@ class SupabaseVectorStore(VectorStore):
                 for i in range(len(keywords) - 1):
                     phrase = f"{keywords[i]} {keywords[i+1]}"
                     if len(phrase) > 5:  # Skip very short phrases
-                        result2 = self._supabase.client.table('embeddings').select(
+                        result2 = self._supabase.client.table('reg_embeddings').select(
                             'id, content, page_number, chunk_index, metadata'
                         ).eq(
                             'subject_id', str(self._subject_id)
