@@ -8,11 +8,13 @@ existing worker endpoints:
 This module adds accounts/roles/enrollment and the assignments feature.
 """
 import re
+import uuid
 import functools
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Form, File, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.db.supabase import get_supabase_client
@@ -161,6 +163,15 @@ class GradeSubmission(BaseModel):
     feedback: Optional[str] = None
 
 
+class PracticeRequest(BaseModel):
+    topic: Optional[str] = Field(None, description="Topic/subject; inferred from recent chat if omitted")
+    count: int = Field(5, ge=1, le=15)
+
+
+class TopUpRequest(BaseModel):
+    amount: int = Field(..., ge=1, description="Amount to top up (in your local currency)")
+
+
 # ==========================================================================
 # AUTH
 # ==========================================================================
@@ -202,6 +213,279 @@ async def login(payload: LoginRequest):
 @surface_errors
 async def me(user: dict = Depends(get_current_user)):
     return {"user": _public_user(user), "school": _school_dict(user.get("school_id"))}
+
+
+# ==========================================================================
+# CHAT — Carati study companion (auto subject detection + moral casual talk)
+# ==========================================================================
+CARATI_SYSTEM_PROMPT = """You are Carati, a warm, encouraging study companion for Cameroon GCE Advanced Level (A-Level) students.
+
+DETECT THE SUBJECT YOURSELF from the question — never ask the student to pick a subject or class.
+
+ACADEMIC QUESTIONS (any GCE subject: mathematics, physics, chemistry, biology, economics, geography, history, literature, computer science, etc.):
+- Answer accurately and align to the Cameroon GCE A-Level syllabus and marking style.
+- Plain text only. No markdown, no LaTeX. Write maths with unicode (x², √, π, ×, ½, H₂O, →). Fractions inline as (a+b)/c.
+- For problems show the working step by step: list data with units, write the formula, substitute, then the result to 3 significant figures with units.
+- Be concise — give the mark-earning answer, not padding.
+
+CASUAL CONVERSATION (greetings, small talk, how they feel):
+- Reply warmly and briefly, like a supportive friend. Light conversation is welcome.
+
+MORAL GUARDRAILS (always apply):
+- Keep everything wholesome, respectful and age-appropriate. Never produce profane, sexual, violent, hateful, dishonest, or otherwise immoral content.
+- If asked for something harmful, unethical, or inappropriate, gently decline and steer the student back to their studies or a positive topic.
+- Encourage honest effort. Support learning and past-paper practice; never help cheat in a live exam.
+
+You are a helpful tool — get the student what they need, kindly and quickly."""
+
+
+def _save_message(user: dict, conversation_id: str, role: str, content: str) -> None:
+    _db().table("reg_messages").insert({
+        "user_id": user["id"],
+        "school_id": user.get("school_id"),
+        "role": role,
+        "content": content,
+        "conversation_id": conversation_id,
+    }).execute()
+
+
+async def _carati_reply(history: list, user_message: str, image_url: Optional[str] = None) -> str:
+    """Generate a Carati reply via the shared OpenRouter/Gemini client. When an
+    image data URL is given, it's sent alongside the text (Gemini is multimodal)."""
+    from app.gateway.routes.llm_clients import async_openrouter_client, GEMINI_MODEL
+    from app.gateway.routes.text_cleanup import clean_math_notation
+
+    msgs = [{"role": "system", "content": CARATI_SYSTEM_PROMPT}]
+    for h in history:
+        role = h.get("role")
+        if role in ("user", "assistant") and h.get("content"):
+            msgs.append({"role": role, "content": h["content"]})
+
+    if image_url:
+        user_content = [
+            {"type": "text", "text": user_message or "Please look at this and help me."},
+            {"type": "image_url", "image_url": {"url": image_url}},
+        ]
+    else:
+        user_content = user_message
+    msgs.append({"role": "user", "content": user_content})
+
+    resp = await async_openrouter_client.chat.completions.create(
+        model=GEMINI_MODEL, messages=msgs, temperature=0.5,
+    )
+    answer = (resp.choices[0].message.content or "").strip() if resp.choices else ""
+    return clean_math_notation(answer) if answer else "I'm not sure how to answer that — try rephrasing?"
+
+
+def _extract_pdf_text(data: bytes) -> str:
+    """Best-effort text extraction from a PDF (PyMuPDF)."""
+    try:
+        import fitz  # PyMuPDF
+        doc = fitz.open(stream=data, filetype="pdf")
+        return "\n".join(page.get_text() for page in doc).strip()
+    except Exception:
+        return ""
+
+
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".heic")
+
+
+@router.post("/chat")
+@surface_errors
+async def chat(
+    message: str = Form(""),
+    conversation_id: str = Form(""),
+    file: UploadFile = File(None),
+    user: dict = Depends(get_current_user),
+):
+    """Send a message and/or an attachment (photo, image, or PDF). Carati reads
+    the attachment, detects the subject, and replies with the chat as context.
+    Casual talk is handled morally. Stores the exchange for 'past chats'."""
+    text = (message or "").strip()
+    conv_id = (conversation_id or "").strip() or str(uuid.uuid4())
+
+    image_url: Optional[str] = None
+    attachment_note: Optional[str] = None
+    if file is not None and file.filename:
+        data = await file.read()
+        mime = (file.content_type or "").lower()
+        fname = file.filename
+        low = fname.lower()
+        if mime.startswith("image") or low.endswith(_IMAGE_EXTS):
+            from app.gateway.routes.llm_clients import image_data_url
+            image_url = image_data_url(data, mime or "image/jpeg")
+            attachment_note = f"📷 {fname}"
+        elif mime == "application/pdf" or low.endswith(".pdf"):
+            pdf_text = _extract_pdf_text(data)
+            if pdf_text:
+                text = (text + "\n\n" if text else "") + f"[Attached document '{fname}']\n{pdf_text[:8000]}"
+            attachment_note = f"📄 {fname}"
+        else:
+            # Try as plain text; otherwise just note it.
+            try:
+                snippet = data.decode("utf-8", errors="ignore").strip()
+                if snippet:
+                    text = (text + "\n\n" if text else "") + f"[Attached file '{fname}']\n{snippet[:8000]}"
+            except Exception:
+                pass
+            attachment_note = f"📎 {fname}"
+
+    if not text and image_url is None and attachment_note is None:
+        raise HTTPException(status_code=400, detail="Type a message or attach a file.")
+
+    history = (
+        _db().table("reg_messages").select("role,content,created_at")
+        .eq("user_id", user["id"]).eq("conversation_id", conv_id)
+        .order("created_at").limit(20).execute().data
+    )
+    answer = await _carati_reply(history, text or "Please help me with this.", image_url=image_url)
+
+    # Store the student's turn — the original caption plus a short attachment note
+    # (not the full extracted PDF dump), so history stays clean and readable.
+    stored_user = (message or "").strip()
+    if attachment_note:
+        stored_user = (stored_user + "  " if stored_user else "") + attachment_note
+    _save_message(user, conv_id, "user", stored_user or "(attachment)")
+    _save_message(user, conv_id, "assistant", answer)
+    return {"conversation_id": conv_id, "answer": answer}
+
+
+@router.get("/chats")
+@surface_errors
+async def list_chats(user: dict = Depends(get_current_user)):
+    """List the student's past conversations, newest first."""
+    rows = (
+        _db().table("reg_messages").select("conversation_id,role,content,created_at")
+        .eq("user_id", user["id"]).order("created_at", desc=True).limit(500).execute().data
+    )
+    convs: dict = {}
+    for r in rows:
+        cid = r.get("conversation_id")
+        if not cid:
+            continue
+        c = convs.get(cid)
+        if c is None:
+            c = {"id": cid, "title": "New chat", "updated_at": r.get("created_at")}
+            convs[cid] = c
+        # rows are newest-first, so the LAST user row seen is the opening question.
+        if r.get("role") == "user" and r.get("content"):
+            t = r["content"].strip()
+            c["title"] = (t[:40] + "…") if len(t) > 40 else t
+    return {"chats": list(convs.values())}
+
+
+@router.get("/chats/{conversation_id}")
+@surface_errors
+async def get_chat(conversation_id: str, user: dict = Depends(get_current_user)):
+    rows = (
+        _db().table("reg_messages").select("role,content,created_at")
+        .eq("user_id", user["id"]).eq("conversation_id", conversation_id)
+        .order("created_at").execute().data
+    )
+    return {"conversation_id": conversation_id, "messages": rows}
+
+
+@router.post("/practice")
+@surface_errors
+async def practice(payload: PracticeRequest, user: dict = Depends(get_current_user)):
+    """Generate a short GCE practice test. Topic is inferred from the student's
+    latest question when not provided."""
+    topic = (payload.topic or "").strip()
+    if not topic:
+        last = (
+            _db().table("reg_messages").select("content")
+            .eq("user_id", user["id"]).eq("role", "user")
+            .order("created_at", desc=True).limit(1).execute().data
+        )
+        topic = last[0]["content"].strip() if last else "general revision"
+
+    prompt = (
+        f"Create a practice test of {payload.count} Cameroon GCE A-Level questions on: {topic}. "
+        "Number each question 1., 2., 3.… After all the questions, add a line 'ANSWERS' followed by "
+        "concise worked answers for each. Plain text only, no markdown or LaTeX; use unicode for maths."
+    )
+    text = await _carati_reply([], prompt)
+    return {"topic": topic, "practice": text}
+
+
+def _render_chat_pdf(user: dict, rows: list) -> bytes:
+    """Render a conversation into a nicely formatted PDF (reportlab)."""
+    from io import BytesIO
+    from xml.sax.saxutils import escape
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+
+    green = colors.HexColor("#2e7d32")
+    green_dark = colors.HexColor("#1b5e20")
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("Ct", parent=styles["Title"], textColor=green, fontSize=22, spaceAfter=2)
+    meta_style = ParagraphStyle("Cm", parent=styles["Normal"], textColor=colors.grey, fontSize=9, spaceAfter=2)
+    you_label = ParagraphStyle("Cyl", parent=styles["Normal"], textColor=green_dark, fontName="Helvetica-Bold", fontSize=9, spaceBefore=12)
+    car_label = ParagraphStyle("Ccl", parent=styles["Normal"], textColor=green, fontName="Helvetica-Bold", fontSize=9, spaceBefore=12)
+    body_style = ParagraphStyle("Cb", parent=styles["Normal"], fontSize=11, leading=15.5, spaceBefore=2)
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm, bottomMargin=18 * mm,
+        title="Carati chat",
+    )
+    story = [
+        Paragraph("Carati", title_style),
+        Paragraph("GCE A-Level study chat", meta_style),
+        Paragraph(f"{escape(user.get('display_name') or 'Student')} · {len(rows)} messages", meta_style),
+        Spacer(1, 6),
+        HRFlowable(width="100%", thickness=1, color=colors.HexColor("#d6e8d6")),
+    ]
+    for r in rows:
+        content = escape((r.get("content") or "").strip()).replace("\n", "<br/>")
+        if not content:
+            continue
+        if r.get("role") == "user":
+            story.append(Paragraph("You", you_label))
+        else:
+            story.append(Paragraph("Carati", car_label))
+        story.append(Paragraph(content, body_style))
+    doc.build(story)
+    return buf.getvalue()
+
+
+@router.get("/chats/{conversation_id}/pdf")
+@surface_errors
+async def chat_pdf(conversation_id: str, user: dict = Depends(get_current_user)):
+    """Download a conversation as a formatted PDF."""
+    rows = (
+        _db().table("reg_messages").select("role,content,created_at")
+        .eq("user_id", user["id"]).eq("conversation_id", conversation_id)
+        .order("created_at").execute().data
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    pdf = _render_chat_pdf(user, rows)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="carati-chat.pdf"'},
+    )
+
+
+@router.post("/topup")
+@surface_errors
+async def topup(payload: TopUpRequest, user: dict = Depends(get_current_user)):
+    """Record a top-up request. NOTE: no payment provider is wired yet — this
+    acknowledges the request so the flow works end to end; connect MTN MoMo /
+    Orange Money / a gateway here to actually collect payment."""
+    return {
+        "status": "pending",
+        "amount": payload.amount,
+        "message": (
+            f"Top-up of {payload.amount} noted. Mobile-money payment is being set "
+            "up — you'll be able to complete it right here shortly."
+        ),
+    }
 
 
 # ==========================================================================
