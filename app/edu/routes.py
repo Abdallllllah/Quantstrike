@@ -222,9 +222,17 @@ CARATI_SYSTEM_PROMPT = """You are Carati, a warm, encouraging study companion fo
 
 DETECT THE SUBJECT YOURSELF from the question — never ask the student to pick a subject or class.
 
+ANSWER DIRECTLY — do NOT interrogate the student. Never reply with a numbered checklist of clarifying questions (e.g. "which subject? which year? which paper?"). Make a sensible assumption and give a useful answer straight away. Ask at most ONE short question, as a single plain sentence, and only if you genuinely cannot proceed without it.
+
+If a student asks for a specific past paper you don't have, don't quiz them — help immediately: explain the topic, or offer to generate practice questions in that exam's style.
+
+FORMATTING — PLAIN TEXT ONLY. This is strict:
+- NEVER use asterisks. No *word* and no **word**. No underscores for emphasis, no # headings, no backticks, no "-" or "*" bullet markers.
+- No bold, no italics, no markdown of any kind. Write in ordinary sentences and short paragraphs.
+- No LaTeX. Write maths with unicode (x², √, π, ×, ½, H₂O, →); fractions inline as (a+b)/c.
+
 ACADEMIC QUESTIONS (any GCE subject: mathematics, physics, chemistry, biology, economics, geography, history, literature, computer science, etc.):
 - Answer accurately and align to the Cameroon GCE A-Level syllabus and marking style.
-- Plain text only. No markdown, no LaTeX. Write maths with unicode (x², √, π, ×, ½, H₂O, →). Fractions inline as (a+b)/c.
 - For problems show the working step by step: list data with units, write the formula, substitute, then the result to 3 significant figures with units.
 - Be concise — give the mark-earning answer, not padding.
 
@@ -237,6 +245,31 @@ MORAL GUARDRAILS (always apply):
 - Encourage honest effort. Support learning and past-paper practice; never help cheat in a live exam.
 
 You are a helpful tool — get the student what they need, kindly and quickly."""
+
+
+_MD_BOLD = re.compile(r"\*\*([^*\n]+?)\*\*")
+_MD_BOLD_U = re.compile(r"__([^_\n]+?)__")
+_MD_ITALIC = re.compile(r"(?<!\*)\*([^*\n]+?)\*(?!\*)")
+_MD_ITALIC_U = re.compile(r"(?<!\w)_([^_\n]+?)_(?!\w)")
+_MD_HEADER = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
+_MD_BULLET = re.compile(r"^(\s*)[*\-+]\s+", re.MULTILINE)
+_MD_CODE = re.compile(r"`([^`]+)`")
+
+
+def _to_plain_text(text: str) -> str:
+    """Strip markdown the model keeps emitting despite instructions —
+    **bold**, *italics*, #headers, `code`, and *-bullets — so the chat shows
+    clean plain text."""
+    if not text:
+        return text
+    text = _MD_BOLD.sub(r"\1", text)
+    text = _MD_BOLD_U.sub(r"\1", text)
+    text = _MD_ITALIC.sub(r"\1", text)
+    text = _MD_ITALIC_U.sub(r"\1", text)
+    text = _MD_HEADER.sub("", text)
+    text = _MD_BULLET.sub(r"\1• ", text)
+    text = _MD_CODE.sub(r"\1", text)
+    return text
 
 
 def _save_message(user: dict, conversation_id: str, role: str, content: str) -> None:
@@ -274,7 +307,7 @@ async def _carati_reply(history: list, user_message: str, image_url: Optional[st
         model=GEMINI_MODEL, messages=msgs, temperature=0.5,
     )
     answer = (resp.choices[0].message.content or "").strip() if resp.choices else ""
-    return clean_math_notation(answer) if answer else "I'm not sure how to answer that — try rephrasing?"
+    return _to_plain_text(clean_math_notation(answer)) if answer else "I'm not sure how to answer that — try rephrasing?"
 
 
 def _extract_pdf_text(data: bytes) -> str:
