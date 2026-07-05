@@ -282,13 +282,45 @@ def _save_message(user: dict, conversation_id: str, role: str, content: str) -> 
     }).execute()
 
 
-async def _carati_reply(history: list, user_message: str, image_url: Optional[str] = None) -> str:
-    """Generate a Carati reply via the shared OpenRouter/Gemini client. When an
-    image data URL is given, it's sent alongside the text (Gemini is multimodal)."""
+async def _retrieve_context(school_id, query: str) -> str:
+    """Subject-agnostic knowledge-base lookup: embed the question and pull the
+    most similar chunks from anywhere in the school's uploads. Returns '' (and
+    degrades to LLM-only) if embeddings/retrieval aren't available."""
+    if not school_id or not query or not query.strip():
+        return ""
+    try:
+        import asyncio
+        from app.rag_legacy import get_embeddings
+        emb = get_embeddings()
+        vector = await asyncio.to_thread(emb.embed_query, query.strip())
+        rows = get_supabase_client().similarity_search_school(vector, school_id, limit=6, threshold=0.15)
+        chunks = [((r.get("content") or "").strip()) for r in rows]
+        chunks = [c for c in chunks if c]
+        return ("\n\n---\n\n".join(chunks))[:6000] if chunks else ""
+    except Exception as e:  # noqa: BLE001
+        print(f"KB retrieval skipped: {e}")
+        return ""
+
+
+async def _carati_reply(history: list, user_message: str, image_url: Optional[str] = None,
+                        context: Optional[str] = None) -> str:
+    """Generate a Carati reply via the shared OpenRouter/Gemini client. Sends an
+    image alongside the text when given (Gemini is multimodal), and grounds the
+    answer in knowledge-base `context` when relevant."""
     from app.gateway.routes.llm_clients import async_openrouter_client, GEMINI_MODEL
     from app.gateway.routes.text_cleanup import clean_math_notation
 
     msgs = [{"role": "system", "content": CARATI_SYSTEM_PROMPT}]
+    if context:
+        msgs.append({
+            "role": "system",
+            "content": (
+                "MATERIALS FROM THE SCHOOL'S KNOWLEDGE BASE. If they are relevant to the "
+                "question, base your answer on them (they are the authoritative source). "
+                "Do not mention that you were given materials. If they are not relevant, "
+                "answer from your own GCE knowledge.\n\n" + context
+            ),
+        })
     for h in history:
         role = h.get("role")
         if role in ("user", "assistant") and h.get("content"):
@@ -335,6 +367,7 @@ async def chat(
     the attachment, detects the subject, and replies with the chat as context.
     Casual talk is handled morally. Stores the exchange for 'past chats'."""
     text = (message or "").strip()
+    raw_query = text  # the student's question, before any PDF text is appended
     conv_id = (conversation_id or "").strip() or str(uuid.uuid4())
 
     image_url: Optional[str] = None
@@ -371,7 +404,12 @@ async def chat(
         .eq("user_id", user["id"]).eq("conversation_id", conv_id)
         .order("created_at").limit(20).execute().data
     )
-    answer = await _carati_reply(history, text or "Please help me with this.", image_url=image_url)
+    # Ground the answer in the school's knowledge base (subject auto-detected by
+    # semantic similarity — no subject needed from the student).
+    context = await _retrieve_context(user.get("school_id"), raw_query)
+    answer = await _carati_reply(
+        history, text or "Please help me with this.", image_url=image_url, context=context,
+    )
 
     # Store the student's turn — the original caption plus a short attachment note
     # (not the full extracted PDF dump), so history stays clean and readable.
@@ -518,6 +556,121 @@ async def topup(payload: TopUpRequest, user: dict = Depends(get_current_user)):
             f"Top-up of {payload.amount} noted. Mobile-money payment is being set "
             "up — you'll be able to complete it right here shortly."
         ),
+    }
+
+
+# ==========================================================================
+# KNOWLEDGE BASE — upload PDFs into the "general" school's vector store
+# ==========================================================================
+async def _detect_subject(text_sample: str) -> str:
+    """Classify a document's GCE subject from a text sample. Falls back to
+    'General' when it can't tell or the LLM is unavailable."""
+    sample = (text_sample or "").strip()
+    if not sample:
+        return "General"
+    try:
+        from app.gateway.routes.llm_clients import async_openrouter_client, GEMINI_MODEL
+        resp = await async_openrouter_client.chat.completions.create(
+            model=GEMINI_MODEL,
+            messages=[
+                {"role": "system", "content": (
+                    "You label a document with its single Cameroon GCE A-Level subject. "
+                    "Reply with ONLY the subject name (e.g. Physics, Chemistry, Mathematics, "
+                    "Biology, Economics, Geography, History). No punctuation, no other words."
+                )},
+                {"role": "user", "content": sample[:3000]},
+            ],
+            temperature=0,
+        )
+        raw = (resp.choices[0].message.content or "").strip() if resp.choices else ""
+        raw = raw.splitlines()[0] if raw else ""
+        cleaned = re.sub(r"[^A-Za-z &]", "", raw).strip()
+        return cleaned or "General"
+    except Exception:
+        return "General"
+
+
+def _get_or_create_subject(name: str):
+    """Find a subject by name/slug, creating it if new (any GCE subject works)."""
+    client = get_supabase_client()
+    name = (name or "").strip() or "General"
+    existing = client.get_subject_by_slug(name)
+    if existing:
+        return existing
+    slug = _slugify(name) or "general"
+    from app.db.models import Subject
+    try:
+        res = _db().table("reg_subjects").insert({"name": name, "slug": slug}).execute()
+        return Subject.model_validate(res.data[0])
+    except Exception:
+        again = client.get_subject_by_slug(slug) or client.get_subject_by_slug(name)
+        if again:
+            return again
+        raise
+
+
+@router.post("/knowledge", status_code=201)
+@surface_errors
+async def upload_knowledge(
+    file: UploadFile = File(..., description="PDF to add to the knowledge base"),
+    subject: str = Form(None, description="Subject slug/name — AUTO-DETECTED if omitted"),
+    class_level: str = Form("A-Level", description="Class/level; created if new"),
+    doc_type: str = Form("notes", description="notes | past_paper | marking_scheme | examples"),
+    user: dict = Depends(get_current_user),
+):
+    """Upload a PDF into the system knowledge base, under the shared 'general'
+    school. It's chunked, embedded, and stored so the chat can retrieve it.
+    The subject is auto-detected from the document when not provided; the class
+    is auto-created if new."""
+    from pathlib import Path
+
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+
+    data = await file.read()
+    temp_dir = Path("uploads")
+    temp_dir.mkdir(exist_ok=True)
+    file_location = temp_dir / file.filename
+    file_location.write_bytes(data)
+
+    client = get_supabase_client()
+    school = _get_or_create_general_school()
+
+    # Subject: use what's given, else auto-detect from the document text.
+    provided = bool((subject or "").strip())
+    subj_name = (subject or "").strip() or await _detect_subject(_extract_pdf_text(data)[:3000])
+    subject_obj = _get_or_create_subject(subj_name)
+
+    want = (class_level or "A-Level").strip()
+    class_obj = None
+    for c in client.get_classes_by_subject(subject_obj.id):
+        if c.name.lower() == want.lower() or want.lower() in c.name.lower():
+            class_obj = c
+            break
+    if class_obj is None:
+        class_obj = client.create_class(name=want, subject_id=subject_obj.id)
+
+    from app.rag.ingestion import get_ingestion_service
+    ingestion = get_ingestion_service()
+    ok, msg = await ingestion.ingest_document(
+        file_path=str(file_location),
+        school_id=str(school.id),
+        subject_id=str(subject_obj.id),
+        class_id=str(class_obj.id),
+        doc_type=doc_type,
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail=msg)
+
+    return {
+        "status": "success",
+        "filename": file.filename,
+        "school": school.slug,
+        "subject": subject_obj.name,
+        "subject_auto_detected": not provided,
+        "class": class_obj.name,
+        "doc_type": doc_type,
+        "message": msg,
     }
 
 

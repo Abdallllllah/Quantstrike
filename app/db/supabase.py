@@ -469,6 +469,23 @@ class SupabaseClient:
         
         return [SimilarityResult.model_validate(row) for row in result.data]
     
+    def similarity_search_school(
+        self,
+        query_embedding: list[float],
+        school_id: UUID,
+        limit: int = 6,
+        threshold: float = 0.15,
+    ) -> list[dict]:
+        """Subject-agnostic similarity search — filtered only by school. Returns
+        raw rows (content/metadata/similarity) so callers can build context."""
+        result = self.client.rpc("reg_match_embeddings_school", {
+            "query_embedding": query_embedding,
+            "match_school_id": str(school_id),
+            "match_count": limit,
+            "match_threshold": threshold,
+        }).execute()
+        return result.data or []
+
     def delete_embeddings_by_document(self, document_id: UUID) -> int:
         """Delete all embeddings for a document."""
         result = self.client.rpc("reg_delete_document_embeddings", {
