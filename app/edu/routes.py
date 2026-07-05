@@ -59,6 +59,8 @@ def _public_user(row: dict) -> dict:
         "role": row.get("role"),
         "school_id": row.get("school_id"),
         "enrolled_by": row.get("enrolled_by"),
+        # Self-reported school (informational only — everyone sits under "general").
+        "origin_school": (row.get("preferences") or {}).get("origin_school"),
     }
 
 
@@ -68,7 +70,8 @@ def _get_user_by_phone(phone: str) -> Optional[dict]:
 
 
 def _create_user(name: str, phone: str, role: str, school_id: Optional[str],
-                 enrolled_by: Optional[str] = None) -> dict:
+                 enrolled_by: Optional[str] = None,
+                 preferences: Optional[dict] = None) -> dict:
     payload = {
         "display_name": name,
         "phone_number": phone,
@@ -76,6 +79,8 @@ def _create_user(name: str, phone: str, role: str, school_id: Optional[str],
         "school_id": school_id,
         "enrolled_by": enrolled_by,
     }
+    if preferences:
+        payload["preferences"] = preferences
     res = _db().table("reg_users").insert(payload).execute()
     return res.data[0]
 
@@ -101,31 +106,33 @@ def _resolve_school(slug_or_name: str):
     return school
 
 
+GENERAL_SCHOOL_SLUG = "general"
+GENERAL_SCHOOL_NAME = "General"
+
+
+def _get_or_create_general_school():
+    """The shared school every self-registered user belongs to. Created on
+    first use so public registration never fails on a missing school."""
+    client = get_supabase_client()
+    school = client.get_school_by_slug(GENERAL_SCHOOL_SLUG)
+    if school:
+        return school
+    from app.db.models import SchoolCreate
+    return client.create_school(SchoolCreate(name=GENERAL_SCHOOL_NAME, slug=GENERAL_SCHOOL_SLUG))
+
+
 # ==========================================================================
 # Request models
 # ==========================================================================
-class SchoolSignup(BaseModel):
-    school_name: str = Field(..., example="Greenwood High")
-    admin_name: str = Field(..., example="Jane Doe")
-    phone: str = Field(..., example="+237600000000")
-
-
-class TeacherSignup(BaseModel):
-    name: str
-    phone: str
-    school: str = Field(..., description="School slug or name")
-
-
-class StudentSignup(BaseModel):
-    name: str
-    phone: str
-    school: str = Field(..., description="School slug or name")
-    teacher_phone: Optional[str] = Field(None, description="Phone of the enrolling teacher")
-
-
 class LoginRequest(BaseModel):
     phone: str
     name: Optional[str] = Field(None, description="Optional; checked against the account name if given")
+
+
+class RegisterRequest(BaseModel):
+    name: str = Field(..., example="Bonam Osene")
+    phone: str = Field(..., example="+254748404401")
+    school: Optional[str] = Field(None, description="Self-reported school (informational only)", example="GBHS Molyko")
 
 
 class EnrollStudent(BaseModel):
@@ -157,59 +164,26 @@ class GradeSubmission(BaseModel):
 # ==========================================================================
 # AUTH
 # ==========================================================================
-@router.post("/schools/signup", status_code=201)
+@router.post("/register", status_code=201)
 @surface_errors
-async def school_signup(payload: SchoolSignup):
-    """Register a school and its first admin (name + phone)."""
-    name = payload.admin_name.strip()
+async def register(payload: RegisterRequest):
+    """Public sign-up. Creates a student under the shared 'general' school —
+    every self-service user is registered here (name + phone, no password)."""
+    name = payload.name.strip()
     phone = payload.phone.strip()
     if not name or not phone:
-        raise HTTPException(status_code=400, detail="admin_name and phone are required")
+        raise HTTPException(status_code=400, detail="name and phone are required")
     if _get_user_by_phone(phone):
-        raise HTTPException(status_code=409, detail="An account with this phone already exists")
-
-    client = get_supabase_client()
-    school_name = payload.school_name.strip()
-    slug = _slugify(school_name)
-    if client.get_school_by_slug(slug):
-        raise HTTPException(status_code=409, detail=f"School '{slug}' already exists")
-
-    from app.db.models import SchoolCreate
-    school = client.create_school(SchoolCreate(name=school_name, slug=slug))
-    admin = _create_user(name, phone, "school_admin", str(school.id))
-    return _auth_response(admin, school={"id": str(school.id), "name": school.name, "slug": school.slug})
-
-
-@router.post("/teachers/signup", status_code=201)
-@surface_errors
-async def teacher_signup(payload: TeacherSignup):
-    """Register a teacher under an existing school."""
-    phone = payload.phone.strip()
-    if _get_user_by_phone(phone):
-        raise HTTPException(status_code=409, detail="An account with this phone already exists")
-    school = _resolve_school(payload.school)
-    teacher = _create_user(payload.name.strip(), phone, "teacher", str(school.id))
-    return _auth_response(teacher, school={"id": str(school.id), "name": school.name, "slug": school.slug})
-
-
-@router.post("/students/signup", status_code=201)
-@surface_errors
-async def student_signup(payload: StudentSignup):
-    """Self-signup for a student, optionally naming the enrolling teacher."""
-    phone = payload.phone.strip()
-    if _get_user_by_phone(phone):
-        raise HTTPException(status_code=409, detail="An account with this phone already exists")
-    school = _resolve_school(payload.school)
-
-    enrolled_by = None
-    if payload.teacher_phone:
-        teacher = _get_user_by_phone(payload.teacher_phone.strip())
-        if not teacher or teacher.get("role") != "teacher" or str(teacher.get("school_id")) != str(school.id):
-            raise HTTPException(status_code=404, detail="Enrolling teacher not found in this school")
-        enrolled_by = teacher["id"]
-
-    student = _create_user(payload.name.strip(), phone, "student", str(school.id), enrolled_by=enrolled_by)
-    return _auth_response(student, school={"id": str(school.id), "name": school.name, "slug": school.slug})
+        raise HTTPException(status_code=409, detail="An account with this phone already exists. Please log in.")
+    school = _get_or_create_general_school()
+    prefs = None
+    if payload.school and payload.school.strip():
+        prefs = {"origin_school": payload.school.strip()}
+    student = _create_user(name, phone, "student", str(school.id), preferences=prefs)
+    return _auth_response(
+        student,
+        school={"id": str(school.id), "name": school.name, "slug": school.slug},
+    )
 
 
 @router.post("/login")
