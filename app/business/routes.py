@@ -11,7 +11,7 @@ import re
 import json
 import uuid
 import functools
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends, Form, File, UploadFile
@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from app.db.supabase import get_supabase_client
 from app.business.auth import make_token, get_current_business_user
-from app.business.transcribe import transcribe_audio, guess_audio_format
+from app.business.transcribe import transcribe_audio
 
 router = APIRouter(prefix="/api/business", tags=["Business (Tara)"])
 
@@ -160,7 +160,7 @@ Classify the intent and extract every transaction mentioned. JSON shape:
       "customer": "Marie" | null     // required for credit and payment
     }
   ],
-  "query": "cash" | "debts" | "profit" | "restock" | "report" | "customer_balance" | null,
+  "query": "cash" | "debts" | "profit" | "restock" | "report" | "customer_balance" | "business" | null,
   "query_customer": "Marie" | null   // for customer_balance
 }
 
@@ -173,6 +173,7 @@ Rules:
 - "who owes / les dettes / who get my money" -> query "debts".
 - "my profit / bénéfice" -> "profit". "what to restock / restocking list" -> "restock".
 - "report / résumé du jour" -> "report". "how much does Marie owe" -> "customer_balance" + query_customer.
+- "how is my business doing / how's business / how am I doing / business overview / comment va mon commerce" -> "business".
 - A pricing question ("I bought the carton at 14500, what do I sell at?") -> intent "advice".
 - Greetings / small talk -> "chitchat".
 Return ONLY the JSON object."""
@@ -444,6 +445,77 @@ def _reply_report(user_id: str) -> str:
     return "\n".join(out)
 
 
+def _business_stats(user_id: str) -> dict:
+    """Aggregate the whole ledger into headline numbers over several periods."""
+    rows = (_db().table("biz_transactions")
+            .select("type,amount,credit_amount,quantity,cost_price,item_name,occurred_at")
+            .eq("user_id", user_id).order("occurred_at", desc=True).limit(3000).execute().data or [])
+    day = _today_start()
+    month = _month_start()
+    week = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+
+    def agg(since: Optional[str]) -> dict:
+        def keep(r):
+            return since is None or (r.get("occurred_at") or "") >= since
+        sales = [r for r in rows if r.get("type") == "sale" and keep(r)]
+        total = sum(_num(r.get("amount")) or 0 for r in sales)
+        profit = 0.0
+        for r in sales:
+            cp = _num(r.get("cost_price"))
+            if cp is not None:
+                q = _num(r.get("quantity")) or 1
+                profit += (_num(r.get("amount")) or 0) - cp * q
+        credit = sum(_num(r.get("credit_amount")) or 0
+                     for r in rows if r.get("type") in ("sale", "credit") and keep(r))
+        return {"sales": round(total), "count": len(sales), "profit": round(profit), "credit_given": round(credit)}
+
+    items: dict = {}
+    for r in rows:
+        if r.get("type") == "sale" and r.get("item_name"):
+            items[r["item_name"]] = items.get(r["item_name"], 0) + (_num(r.get("amount")) or 0)
+    top = sorted(items.items(), key=lambda x: x[1], reverse=True)[:5]
+    debts = _debts(user_id)
+    return {
+        "today": agg(day), "this_week": agg(week), "this_month": agg(month), "all_time": agg(None),
+        "top_items": [{"item": k, "sold": round(v)} for k, v in top],
+        "owed_to_you": round(sum(d["balance"] for d in debts)),
+        "people_who_owe": len(debts),
+        "currency": CURRENCY,
+    }
+
+
+async def _describe_business(stats: dict) -> str:
+    from app.gateway.routes.llm_clients import async_openrouter_client, GEMINI_MODEL
+    prompt = (
+        "You are Tara, a warm shop assistant. Using ONLY the figures below (all in FCFA), write a short "
+        "plain-text summary (3 to 5 sentences) of how the shop is doing: how much has been sold "
+        "(today / this week / this month), the profit, the best-selling items, how much money is owed to "
+        "the shopkeeper, and ONE practical suggestion. Be encouraging and concrete. No markdown, no "
+        "asterisks, no bullet points.\n\nFigures:\n" + json.dumps(stats, ensure_ascii=False)
+    )
+    try:
+        resp = await async_openrouter_client.chat.completions.create(
+            model=GEMINI_MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.4,
+        )
+        return (resp.choices[0].message.content or "").strip() if resp.choices else ""
+    except Exception:
+        return ""
+
+
+async def _reply_business(user_id: str) -> str:
+    """How's my business doing — deterministic headline + an LLM narrative."""
+    st = _business_stats(user_id)
+    m, a = st["this_month"], st["all_time"]
+    headline = (
+        f"This month you've sold {_fmt(m['sales'])} {CURRENCY} across {m['count']} "
+        f"{'sale' if m['count'] == 1 else 'sales'}"
+        f"{', profit about ' + _fmt(m['profit']) + ' ' + CURRENCY if m['profit'] else ''}. "
+        f"All-time: {_fmt(a['sales'])} {CURRENCY}."
+    )
+    desc = await _describe_business(st)
+    return headline + ("\n\n" + desc if desc else "")
+
+
 def _query_reply(user_id: str, query: Optional[str], query_customer: Optional[str]) -> str:
     return {
         "cash": lambda: _reply_cash(user_id),
@@ -513,9 +585,12 @@ async def message(
         mime = (file.content_type or "").lower()
         if mime.startswith("audio") or file.filename.lower().endswith((".wav", ".mp3", ".m4a", ".ogg", ".webm")):
             source = "voice"
-            fmt = guess_audio_format(file.filename, mime)
-            transcript = await transcribe_audio(data, fmt)
-            said = (said + " " if said else "") + (transcript or "")
+            transcript = await transcribe_audio(data, file.filename, mime)
+            if not transcript.strip():
+                msg = "I couldn't catch that — please record again, a little closer to the phone."
+                _save_message(user_id, "assistant", msg)
+                return {"reply": msg, "intent": "error", "recorded": 0}
+            said = (said + " " if said else "") + transcript
         elif mime.startswith("image") or file.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
             source = "photo"
             from app.gateway.routes.llm_clients import image_data_url
@@ -549,7 +624,11 @@ async def message(
         else:
             reply = "I couldn't find anything to record — tell me what you sold, bought, or who took credit."
     elif intent == "query":
-        reply = _query_reply(user_id, parsed.get("query"), parsed.get("query_customer"))
+        q = parsed.get("query")
+        if q == "business":
+            reply = await _reply_business(user_id)
+        else:
+            reply = _query_reply(user_id, q, parsed.get("query_customer"))
     else:  # advice / chitchat
         reply = await _advice_reply(said, recent) or "How can I help with your shop today?"
 
@@ -611,3 +690,12 @@ async def items(user: dict = Depends(get_current_business_user)):
 @surface_errors
 async def report(user: dict = Depends(get_current_business_user)):
     return {"report": _reply_report(user["id"])}
+
+
+@router.get("/overview")
+@surface_errors
+async def overview(user: dict = Depends(get_current_business_user)):
+    """How's my business doing — aggregated stats + a written description."""
+    st = _business_stats(user["id"])
+    desc = await _describe_business(st)
+    return {"stats": st, "description": desc}

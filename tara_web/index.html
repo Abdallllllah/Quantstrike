@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Tara — shop assistant tester</title>
+<style>
+  :root{
+    --green-900:#083d30; --green-700:#0f6e56; --green-100:#e7f2ed;
+    --gold-600:#ef9f27; --gold-300:#f6c46b; --ink:#22302b;
+    --bg-chat:#e9e6df; --bubble-me:#d7f4df; --border:#dfe3e1; --muted:#6b7a74;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink)}
+  body{background:#f3f4f2;display:flex;justify-content:center}
+  .phone{width:100%;max-width:460px;height:100dvh;display:flex;flex-direction:column;background:var(--bg-chat);position:relative;overflow:hidden}
+
+  /* ---------- login ---------- */
+  #login{position:absolute;inset:0;background:#fff;display:flex;flex-direction:column;justify-content:center;padding:28px;z-index:20}
+  #login h1{margin:0 0 4px;color:var(--green-700);display:flex;align-items:center;gap:10px}
+  #login .dot{width:34px;height:34px;border-radius:50%;background:var(--gold-600);display:grid;place-items:center;color:#fff;font-weight:800}
+  #login p{color:var(--muted);margin:0 0 20px}
+  label{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
+  input{width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:12px;font-size:15px;outline:none}
+  input:focus{border-color:var(--green-700)}
+  .btn{width:100%;margin-top:20px;padding:14px;border:none;border-radius:12px;background:var(--green-700);color:#fff;font-size:16px;font-weight:700;cursor:pointer}
+  .btn:disabled{opacity:.6}
+  .err{background:#fde8e8;color:#b3261e;padding:10px 12px;border-radius:10px;margin-top:14px;font-size:14px;display:none}
+
+  /* ---------- header ---------- */
+  header{background:var(--green-700);color:#fff;display:flex;align-items:center;gap:10px;padding:10px 12px;padding-top:max(10px,env(safe-area-inset-top))}
+  header .mark{width:36px;height:36px;border-radius:50%;background:var(--gold-600);display:grid;place-items:center;font-weight:800}
+  header .title{flex:1;line-height:1.15}
+  header .title b{font-size:16px}
+  header .title span{font-size:12px;opacity:.85;display:block}
+  .icon{background:transparent;border:none;color:#fff;cursor:pointer;padding:7px;border-radius:50%;display:grid;place-items:center}
+  .icon:hover{background:rgba(255,255,255,.15)}
+
+  /* ---------- chat ---------- */
+  #messages{flex:1;overflow-y:auto;padding:14px 12px;display:flex;flex-direction:column;gap:8px}
+  .bubble{max-width:82%;padding:8px 11px;border-radius:12px;font-size:15px;line-height:1.45;white-space:pre-wrap;word-wrap:break-word;box-shadow:0 1px 1px rgba(0,0,0,.08)}
+  .me{align-self:flex-end;background:#d7f4df;border-top-right-radius:3px}
+  .ta{align-self:flex-start;background:#fff;border-top-left-radius:3px}
+  .typing{color:var(--muted);font-size:13px;align-self:flex-start}
+  .hint{color:var(--muted);font-size:13px;text-align:center;margin:auto;max-width:280px;padding:20px}
+  .hint b{color:var(--ink)}
+
+  /* ---------- composer ---------- */
+  .composer{display:flex;align-items:center;gap:6px;padding:8px 10px;padding-bottom:max(8px,env(safe-area-inset-bottom));background:var(--bg-chat)}
+  .composer .icon{color:var(--green-700)}
+  .composer input[type=text]{flex:1;border:none;border-radius:22px;padding:12px 16px;font-size:15px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .send{width:46px;height:46px;border-radius:50%;border:none;background:var(--gold-600);color:#fff;display:grid;place-items:center;cursor:pointer;flex:none}
+  .send:disabled{opacity:.5}
+  .rec{background:#e53935 !important;animation:pulse 1s infinite}
+  @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.08)}}
+  .chip{margin:0 10px 6px;padding:8px 10px;background:#fff;border-radius:10px;font-size:13px;display:flex;gap:8px;align-items:center}
+  .chip button{margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer}
+
+  /* ---------- dashboard ---------- */
+  #dash{position:absolute;inset:0;background:rgba(0,0,0,.4);display:none;z-index:15}
+  #dash .panel{position:absolute;top:0;right:0;bottom:0;width:min(90%,380px);background:#fff;padding:18px;overflow-y:auto;box-shadow:-2px 0 16px rgba(0,0,0,.25)}
+  #dash h2{margin:0 0 12px;color:var(--green-700);display:flex;justify-content:space-between;align-items:center}
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+  .card{background:var(--green-100);border-radius:12px;padding:12px}
+  .card .v{font-size:22px;font-weight:800;color:var(--green-900)}
+  .card .l{font-size:12px;color:var(--muted)}
+  .card.wide{grid-column:1/3;background:#fff7ea}
+  .debt{display:flex;justify-content:space-between;padding:10px 4px;border-bottom:1px solid var(--border);font-size:14px}
+  .refresh{background:var(--green-100);border:none;border-radius:10px;padding:6px 10px;color:var(--green-700);cursor:pointer;font-size:13px}
+  svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+</style>
+</head>
+<body>
+<div class="phone">
+
+  <!-- LOGIN -->
+  <div id="login">
+    <h1><span class="dot">t</span> Tara</h1>
+    <p>Your shop assistant — record, and Tara keeps the books.</p>
+    <label>Backend URL</label>
+    <input id="api" placeholder="https://quantstrike.onrender.com" />
+    <label>Shop name</label>
+    <input id="shop" placeholder="Chez Bonam" />
+    <label>Phone number (your login)</label>
+    <input id="phone" placeholder="+237 6xx xxx xxx" inputmode="tel" />
+    <button class="btn" id="startBtn" onclick="start()">Start</button>
+    <div class="err" id="loginErr"></div>
+  </div>
+
+  <!-- HEADER -->
+  <header>
+    <div class="mark">t</div>
+    <div class="title"><b>Tara</b><span id="shopLabel">shop assistant</span></div>
+    <button class="icon" title="Dashboard" onclick="openDash()"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></button>
+    <button class="icon" title="Log out" onclick="logout()"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
+  </header>
+
+  <!-- MESSAGES -->
+  <div id="messages">
+    <div class="hint" id="hint"><b>Try:</b> “I sold 4 kg of sugar at 2600”, then “Marie took 4000 on credit”, then “my cash?”. Or tap the mic and say it.</div>
+  </div>
+
+  <!-- ATTACH CHIP -->
+  <div class="chip" id="chip" style="display:none"><span id="chipName"></span><button onclick="clearFile()">✕</button></div>
+
+  <!-- COMPOSER -->
+  <div class="composer">
+    <input type="file" id="fileIn" accept="image/*,audio/*" hidden onchange="onFile(event)" />
+    <button class="icon" title="Photo" onclick="fileIn.click()"><svg viewBox="0 0 24 24"><path d="M14.5 4l1.5 2h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3l1.5-2z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
+    <button class="icon" id="micBtn" title="Record" onclick="toggleRec()"><svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg></button>
+    <input type="text" id="text" placeholder="Type a message" onkeydown="if(event.key==='Enter')send()" />
+    <button class="send" id="sendBtn" onclick="send()"><svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div id="dash" onclick="if(event.target.id==='dash')closeDash()">
+    <div class="panel">
+      <h2>Today <button class="refresh" onclick="loadDash()">↻ Refresh</button></h2>
+      <div class="cards" id="dashCards"></div>
+      <h2 style="font-size:16px">Debt book</h2>
+      <div id="dashDebts"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const LS = {
+  get api(){ return localStorage.getItem('tara_api') || 'https://quantstrike.onrender.com'; },
+  set api(v){ localStorage.setItem('tara_api', v); },
+  get token(){ return localStorage.getItem('tara_token') || ''; },
+  set token(v){ v ? localStorage.setItem('tara_token', v) : localStorage.removeItem('tara_token'); },
+  get shop(){ return localStorage.getItem('tara_shop') || ''; },
+  set shop(v){ localStorage.setItem('tara_shop', v); },
+};
+let pendingFile = null, busy = false;
+
+function fmt(n){ return Math.round(Number(n||0)).toLocaleString('en-US').replace(/,/g,' '); }
+
+async function api(path, opts={}){
+  const headers = opts.headers || {};
+  if (LS.token) headers['Authorization'] = 'Bearer ' + LS.token;
+  const res = await fetch(LS.api.replace(/\/$/,'') + path, {...opts, headers});
+  const ct = res.headers.get('content-type')||'';
+  const body = ct.includes('json') ? await res.json() : await res.text();
+  if (!res.ok){ throw new Error((body && body.detail) || res.status + ' error'); }
+  return body;
+}
+
+/* ---------- auth ---------- */
+async function start(){
+  const err = document.getElementById('loginErr'); err.style.display='none';
+  const phone = document.getElementById('phone').value.trim();
+  const shop  = document.getElementById('shop').value.trim();
+  const apiv  = document.getElementById('api').value.trim();
+  if (apiv) LS.api = apiv;
+  if (!phone){ err.textContent='Enter your phone number.'; err.style.display='block'; return; }
+  const btn = document.getElementById('startBtn'); btn.disabled=true; btn.textContent='Starting…';
+  try{
+    const r = await api('/api/business/register', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ phone, shop_name: shop })
+    });
+    LS.token = r.token; LS.shop = shop || (r.user && r.user.shop_name) || 'My shop';
+    showApp();
+  }catch(e){ err.textContent = e.message; err.style.display='block'; }
+  finally{ btn.disabled=false; btn.textContent='Start'; }
+}
+function logout(){ LS.token=''; location.reload(); }
+
+function showApp(){
+  document.getElementById('login').style.display='none';
+  document.getElementById('shopLabel').textContent = LS.shop || 'shop assistant';
+}
+
+/* ---------- chat ---------- */
+function addBubble(text, who){
+  const hint = document.getElementById('hint'); if (hint) hint.remove();
+  const el = document.createElement('div');
+  el.className = 'bubble ' + (who==='me'?'me':'ta');
+  el.textContent = text;
+  const m = document.getElementById('messages');
+  m.appendChild(el); m.scrollTop = m.scrollHeight;
+  return el;
+}
+function typing(on){
+  let t = document.getElementById('typing');
+  if (on && !t){ t=document.createElement('div'); t.id='typing'; t.className='typing'; t.textContent='Tara is typing…';
+    const m=document.getElementById('messages'); m.appendChild(t); m.scrollTop=m.scrollHeight; }
+  if (!on && t) t.remove();
+}
+
+function onFile(e){ const f=e.target.files[0]; if(f){ pendingFile=f; showChip(f.name);} e.target.value=''; }
+function showChip(name){ document.getElementById('chipName').textContent='📎 '+name; document.getElementById('chip').style.display='flex'; }
+function clearFile(){ pendingFile=null; document.getElementById('chip').style.display='none'; }
+
+async function send(){
+  const input = document.getElementById('text');
+  const text = input.value.trim();
+  if ((!text && !pendingFile) || busy) return;
+  const file = pendingFile;
+  input.value=''; clearFile(); busy=true; document.getElementById('sendBtn').disabled=true;
+  addBubble(text + (file ? (text?'\n':'')+'📎 '+file.name : ''), 'me');
+  typing(true);
+  try{
+    const fd = new FormData();
+    fd.append('text', text);
+    if (file) fd.append('file', file, file.name);
+    const r = await api('/api/business/message', { method:'POST', body: fd });
+    typing(false); addBubble(r.reply || '(no reply)', 'ta');
+  }catch(e){ typing(false); addBubble('⚠️ '+e.message, 'ta'); }
+  finally{ busy=false; document.getElementById('sendBtn').disabled=false; }
+}
+
+/* ---------- voice: record -> 16k mono WAV -> send ---------- */
+let mediaRec=null, chunks=[];
+async function toggleRec(){
+  const btn=document.getElementById('micBtn');
+  if (mediaRec && mediaRec.state==='recording'){ mediaRec.stop(); return; }
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    chunks=[]; mediaRec=new MediaRecorder(stream);
+    mediaRec.ondataavailable=e=>chunks.push(e.data);
+    mediaRec.onstop=async()=>{
+      btn.classList.remove('rec'); stream.getTracks().forEach(t=>t.stop());
+      const blob=new Blob(chunks,{type:chunks[0]?.type||'audio/webm'});
+      try{ const wav=await toWav(blob); pendingFile=new File([wav],'note.wav',{type:'audio/wav'}); await send(); }
+      catch(e){ addBubble('⚠️ Could not process the recording: '+e.message,'ta'); }
+    };
+    mediaRec.start(); btn.classList.add('rec');
+  }catch(e){ addBubble('⚠️ Microphone blocked: '+e.message,'ta'); }
+}
+async function toWav(blob){
+  const buf=await blob.arrayBuffer();
+  const ctx=new (window.AudioContext||window.webkitAudioContext)();
+  const decoded=await ctx.decodeAudioData(buf);
+  const rate=16000, len=Math.max(1,Math.round(decoded.duration*rate));
+  const off=new OfflineAudioContext(1,len,rate);
+  const src=off.createBufferSource(); src.buffer=decoded; src.connect(off.destination); src.start();
+  const rendered=await off.startRendering();
+  return encodeWav(rendered.getChannelData(0), rate);
+}
+function encodeWav(samples, rate){
+  const buf=new ArrayBuffer(44+samples.length*2), v=new DataView(buf);
+  const w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
+  w(0,'RIFF'); v.setUint32(4,36+samples.length*2,true); w(8,'WAVE'); w(12,'fmt ');
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,rate,true); v.setUint32(28,rate*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+  w(36,'data'); v.setUint32(40,samples.length*2,true);
+  let o=44; for(let i=0;i<samples.length;i++){ const s=Math.max(-1,Math.min(1,samples[i])); v.setInt16(o,s<0?s*0x8000:s*0x7FFF,true); o+=2; }
+  return new Blob([v],{type:'audio/wav'});
+}
+
+/* ---------- dashboard ---------- */
+function openDash(){ document.getElementById('dash').style.display='block'; loadDash(); }
+function closeDash(){ document.getElementById('dash').style.display='none'; }
+async function loadDash(){
+  const cards=document.getElementById('dashCards'), dl=document.getElementById('dashDebts');
+  cards.innerHTML='<div class="card"><div class="v">…</div></div>';
+  try{
+    const s=await api('/api/business/summary');
+    const t=s.today||{};
+    cards.innerHTML=`
+      <div class="card wide"><div class="v">${fmt(t.drawer)} ${s.currency||'FCFA'}</div><div class="l">Drawer should hold</div></div>
+      <div class="card"><div class="v">${fmt(t.sales)}</div><div class="l">Sales today</div></div>
+      <div class="card"><div class="v">${fmt(t.credit_given)}</div><div class="l">Credit given</div></div>
+      <div class="card"><div class="v">${fmt(s.profit_month)}</div><div class="l">Profit (month)</div></div>
+      <div class="card"><div class="v">${fmt(s.debt_total)}</div><div class="l">Owed to you</div></div>`;
+    const d=await api('/api/business/debts');
+    dl.innerHTML = (d.debts&&d.debts.length)
+      ? d.debts.map(x=>`<div class="debt"><span>${x.name}</span><b>${fmt(x.balance)} ${d.currency||''}</b></div>`).join('')
+      : '<div class="debt" style="color:var(--muted)">Nobody owes you right now 👍</div>';
+  }catch(e){ cards.innerHTML='<div class="card wide"><div class="l">⚠️ '+e.message+'</div></div>'; }
+}
+
+/* ---------- boot ---------- */
+document.getElementById('api').value = LS.api;
+if (LS.token){ document.getElementById('shop').value=LS.shop; showApp(); }
+</script>
+</body>
+</html>
