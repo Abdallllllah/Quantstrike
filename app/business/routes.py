@@ -90,6 +90,10 @@ class LoginRequest(BaseModel):
     phone: str
 
 
+class EditRequest(BaseModel):
+    text: str
+
+
 # ==========================================================================
 # entity resolution
 # ==========================================================================
@@ -131,10 +135,11 @@ def _get_or_create_item(user_id: str, name: Optional[str], unit: Optional[str]) 
     return _db().table("biz_items").insert(payload).execute().data[0]
 
 
-def _save_message(user_id: str, role: str, content: str) -> None:
+def _save_message(user_id: str, role: str, content: str) -> Optional[str]:
     if not content:
-        return
-    _db().table("biz_messages").insert({"user_id": user_id, "role": role, "content": content}).execute()
+        return None
+    res = _db().table("biz_messages").insert({"user_id": user_id, "role": role, "content": content}).execute()
+    return res.data[0]["id"] if res.data else None
 
 
 # ==========================================================================
@@ -239,7 +244,7 @@ async def _advice_reply(text: str, recent: list) -> str:
 # ==========================================================================
 # recording (deterministic side effects)
 # ==========================================================================
-def _record_transaction(user_id: str, tx: dict, source: str, raw_text: str) -> dict:
+def _record_transaction(user_id: str, tx: dict, source: str, raw_text: str, message_id: Optional[str] = None) -> dict:
     ttype = (tx.get("type") or "sale").strip().lower()
     if ttype not in ("sale", "restock", "credit", "payment", "expense"):
         ttype = "other"
@@ -283,6 +288,7 @@ def _record_transaction(user_id: str, tx: dict, source: str, raw_text: str) -> d
         "direction": direction,
         "source": source,
         "raw_text": raw_text,
+        "message_id": message_id,
         "occurred_at": _now_iso(),
     }).execute().data[0]
 
@@ -603,11 +609,10 @@ async def message(
               .eq("user_id", user_id).order("created_at", desc=True).limit(6).execute().data or [])
     recent = list(reversed(recent))
 
+    user_msg_id = _save_message(user_id, "user", said or "(photo)")
     parsed = await _extract(said, image_url, recent)
     intent = parsed.get("intent")
     txs = parsed.get("transactions") or []
-
-    _save_message(user_id, "user", said or "(photo)")
 
     if intent in ("record", "correction"):
         if intent == "correction":
@@ -616,7 +621,7 @@ async def message(
                     .eq("user_id", user_id).order("created_at", desc=True).limit(1).execute().data)
             if last:
                 _db().table("biz_transactions").delete().eq("id", last[0]["id"]).execute()
-        recorded = [_record_transaction(user_id, t, source, said) for t in txs] if txs else []
+        recorded = [_record_transaction(user_id, t, source, said, message_id=user_msg_id) for t in txs] if txs else []
         if recorded:
             lines = "\n".join(_line_for(r) for r in recorded)
             s = _cash_summary(_today_rows(user_id))
@@ -633,7 +638,45 @@ async def message(
         reply = await _advice_reply(said, recent) or "How can I help with your shop today?"
 
     _save_message(user_id, "assistant", reply)
-    return {"reply": reply, "intent": intent, "recorded": len(txs) if intent in ("record", "correction") else 0}
+    return {"reply": reply, "intent": intent, "message_id": user_msg_id,
+            "recorded": len(txs) if intent in ("record", "correction") else 0}
+
+
+@router.post("/messages/{message_id}/edit")
+@surface_errors
+async def edit_message(message_id: str, payload: EditRequest, user: dict = Depends(get_current_business_user)):
+    """WhatsApp-style edit: rewrite a message and update its record. Deletes the
+    transactions the original message created, then re-records from the new text."""
+    user_id = user["id"]
+    new_text = (payload.text or "").strip()
+    if not new_text:
+        raise HTTPException(status_code=400, detail="New text is required.")
+
+    msg = (_db().table("biz_messages").select("*")
+           .eq("id", message_id).eq("user_id", user_id).limit(1).execute().data)
+    if not msg or msg[0].get("role") != "user":
+        raise HTTPException(status_code=404, detail="Message not found.")
+
+    _db().table("biz_transactions").delete().eq("message_id", message_id).execute()
+    _db().table("biz_messages").update({"content": new_text}).eq("id", message_id).execute()
+
+    parsed = await _extract(new_text, None, [])
+    intent = parsed.get("intent")
+    txs = parsed.get("transactions") or []
+    if intent in ("record", "correction"):
+        recorded = [_record_transaction(user_id, t, "edit", new_text, message_id=message_id) for t in txs]
+        if recorded:
+            lines = "\n".join(_line_for(r) for r in recorded)
+            s = _cash_summary(_today_rows(user_id))
+            reply = f"Updated:\n{lines}\nToday's sales: {_fmt(s['sales'])} {CURRENCY}"
+        else:
+            reply = "Updated — nothing to record from that message."
+    elif intent == "query":
+        q = parsed.get("query")
+        reply = await _reply_business(user_id) if q == "business" else _query_reply(user_id, q, parsed.get("query_customer"))
+    else:
+        reply = "Updated."
+    return {"reply": reply, "message_id": message_id, "recorded": len(txs)}
 
 
 # ==========================================================================

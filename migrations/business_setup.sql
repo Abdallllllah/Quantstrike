@@ -63,8 +63,9 @@ CREATE TABLE IF NOT EXISTS biz_transactions (
     customer_id   UUID REFERENCES biz_customers(id) ON DELETE SET NULL,
     customer_name VARCHAR(160),
     direction  VARCHAR(4),                  -- 'in' | 'out'
-    source     VARCHAR(10) DEFAULT 'text',  -- voice | text | photo
+    source     VARCHAR(10) DEFAULT 'text',  -- voice | text | photo | edit
     raw_text   TEXT,
+    message_id UUID,                        -- the biz_messages turn that created this (for edits)
     occurred_at TIMESTAMPTZ DEFAULT NOW(),
     metadata JSONB DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT NOW()
@@ -72,6 +73,7 @@ CREATE TABLE IF NOT EXISTS biz_transactions (
 CREATE INDEX IF NOT EXISTS idx_biz_tx_user_time ON biz_transactions(user_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_biz_tx_customer  ON biz_transactions(customer_id);
 CREATE INDEX IF NOT EXISTS idx_biz_tx_type      ON biz_transactions(user_id, type);
+CREATE INDEX IF NOT EXISTS idx_biz_tx_message   ON biz_transactions(message_id);
 
 -- ---------- MESSAGES (assistant conversation log) ----------
 CREATE TABLE IF NOT EXISTS biz_messages (
