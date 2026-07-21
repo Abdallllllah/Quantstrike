@@ -15,9 +15,13 @@
 -- >>> Skip / comment out this block if the target DB has data to keep. <<<
 -- ============================================================
 DROP FUNCTION IF EXISTS reg_match_embeddings(vector, uuid, uuid, uuid, int, float) CASCADE;
+DROP FUNCTION IF EXISTS reg_match_embeddings_school(vector, uuid, int, float) CASCADE;
 DROP FUNCTION IF EXISTS reg_get_document_chunks(uuid) CASCADE;
 DROP FUNCTION IF EXISTS reg_delete_document_embeddings(uuid) CASCADE;
 
+DROP TABLE IF EXISTS reg_assignment_submissions CASCADE;
+DROP TABLE IF EXISTS reg_assignment_targets     CASCADE;
+DROP TABLE IF EXISTS reg_assignments            CASCADE;
 DROP TABLE IF EXISTS reg_embeddings CASCADE;
 DROP TABLE IF EXISTS reg_messages   CASCADE;
 DROP TABLE IF EXISTS reg_documents  CASCADE;
@@ -52,11 +56,18 @@ CREATE TABLE IF NOT EXISTS reg_subjects (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 10 GCE (Cameroon) Advanced Level subjects.
 INSERT INTO reg_subjects (name, slug, prompt_template, retrieval_k) VALUES
-('Mathematics', 'math',    'You are a mathematics tutor. Focus on step-by-step calculations and clear explanations of formulas.', 5),
-('Physics',     'physics', 'You are a physics tutor. Explain concepts with real-world examples and include relevant equations.', 5),
-('Chemistry',   'chemistry','You are a chemistry tutor. Explain reactions, molecular structures, and chemical principles clearly.', 5),
-('Biology',     'biology',  NULL, 5)
+('Mathematics',         'math',                'You are a mathematics tutor. Focus on step-by-step calculations and clear explanations of formulas.', 5),
+('Physics',             'physics',             'You are a physics tutor. Explain concepts with real-world examples and include relevant equations.', 5),
+('Chemistry',           'chemistry',           'You are a chemistry tutor. Explain reactions, molecular structures, and chemical principles clearly.', 5),
+('Biology',             'biology',             NULL, 5),
+('Further Mathematics', 'further-mathematics', NULL, 5),
+('Computer Science',    'computer-science',    NULL, 5),
+('ICT',                 'ict',                 NULL, 5),
+('Economics',           'economics',           NULL, 5),
+('Geography',           'geography',           NULL, 5),
+('History',             'history',             NULL, 5)
 ON CONFLICT (slug) DO NOTHING;
 
 -- ---------- CLASSES ----------
@@ -72,20 +83,30 @@ CREATE TABLE IF NOT EXISTS reg_classes (
 );
 CREATE INDEX IF NOT EXISTS idx_reg_classes_subject ON reg_classes(subject_id);
 
+-- An "A-Level" class for every subject.
+INSERT INTO reg_classes (name, subject_id)
+SELECT 'A-Level', s.id FROM reg_subjects s
+ON CONFLICT (name, subject_id) DO NOTHING;
+
 -- ---------- USERS ----------
 CREATE TABLE IF NOT EXISTS reg_users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     phone_number VARCHAR(20) UNIQUE NOT NULL,
     display_name VARCHAR(100),
     school_id UUID REFERENCES reg_schools(id),
+    role TEXT NOT NULL DEFAULT 'student' CHECK (role IN ('school_admin', 'teacher', 'student')),
+    enrolled_by UUID REFERENCES reg_users(id) ON DELETE SET NULL,
+    is_active BOOLEAN DEFAULT TRUE,
     current_subject_id UUID REFERENCES reg_subjects(id),
     current_class_id UUID REFERENCES reg_classes(id),
     preferences JSONB DEFAULT '{}',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_reg_users_phone  ON reg_users(phone_number);
-CREATE INDEX IF NOT EXISTS idx_reg_users_school ON reg_users(school_id);
+CREATE INDEX IF NOT EXISTS idx_reg_users_phone       ON reg_users(phone_number);
+CREATE INDEX IF NOT EXISTS idx_reg_users_school      ON reg_users(school_id);
+CREATE INDEX IF NOT EXISTS idx_reg_users_role        ON reg_users(role);
+CREATE INDEX IF NOT EXISTS idx_reg_users_enrolled_by ON reg_users(enrolled_by);
 
 -- ---------- MESSAGES (conversation history) ----------
 CREATE TABLE IF NOT EXISTS reg_messages (
@@ -98,11 +119,13 @@ CREATE TABLE IF NOT EXISTS reg_messages (
     content TEXT NOT NULL,
     intent VARCHAR(50),
     metadata JSONB DEFAULT '{}',
+    conversation_id UUID,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_reg_messages_user_time ON reg_messages(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_reg_messages_context   ON reg_messages(user_id, subject_id, class_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_reg_messages_school    ON reg_messages(school_id);
+CREATE INDEX IF NOT EXISTS idx_reg_messages_user_time    ON reg_messages(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reg_messages_context      ON reg_messages(user_id, subject_id, class_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reg_messages_school       ON reg_messages(school_id);
+CREATE INDEX IF NOT EXISTS idx_reg_messages_conversation ON reg_messages(user_id, conversation_id, created_at);
 
 -- ---------- DOCUMENTS ----------
 CREATE TABLE IF NOT EXISTS reg_documents (
@@ -141,6 +164,47 @@ CREATE INDEX IF NOT EXISTS idx_reg_embeddings_school      ON reg_embeddings(scho
 CREATE INDEX IF NOT EXISTS idx_reg_embeddings_vector
     ON reg_embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 
+-- ---------- ASSIGNMENTS (edu app) ----------
+CREATE TABLE IF NOT EXISTS reg_assignments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    school_id  UUID REFERENCES reg_schools(id)  ON DELETE CASCADE,
+    teacher_id UUID REFERENCES reg_users(id)    ON DELETE CASCADE,
+    subject_id UUID REFERENCES reg_subjects(id) ON DELETE SET NULL,
+    class_id   UUID REFERENCES reg_classes(id)  ON DELETE SET NULL,
+    title       VARCHAR(200) NOT NULL,
+    description TEXT,
+    due_date    TIMESTAMPTZ,
+    is_active   BOOLEAN DEFAULT TRUE,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_reg_assignments_school  ON reg_assignments(school_id);
+CREATE INDEX IF NOT EXISTS idx_reg_assignments_teacher ON reg_assignments(teacher_id);
+
+CREATE TABLE IF NOT EXISTS reg_assignment_targets (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    assignment_id UUID REFERENCES reg_assignments(id) ON DELETE CASCADE,
+    student_id    UUID REFERENCES reg_users(id)       ON DELETE CASCADE,
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (assignment_id, student_id)
+);
+CREATE INDEX IF NOT EXISTS idx_reg_assignment_targets_student ON reg_assignment_targets(student_id);
+
+CREATE TABLE IF NOT EXISTS reg_assignment_submissions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    assignment_id UUID REFERENCES reg_assignments(id) ON DELETE CASCADE,
+    student_id    UUID REFERENCES reg_users(id)       ON DELETE CASCADE,
+    content   TEXT,
+    grade     VARCHAR(50),
+    feedback  TEXT,
+    status    VARCHAR(20) DEFAULT 'submitted',  -- submitted | graded
+    submitted_at TIMESTAMPTZ DEFAULT NOW(),
+    graded_at    TIMESTAMPTZ,
+    UNIQUE (assignment_id, student_id)
+);
+CREATE INDEX IF NOT EXISTS idx_reg_submissions_assignment ON reg_assignment_submissions(assignment_id);
+CREATE INDEX IF NOT EXISTS idx_reg_submissions_student    ON reg_assignment_submissions(student_id);
+
 -- ---------- updated_at TRIGGER ----------
 CREATE OR REPLACE FUNCTION reg_update_updated_at_column()
 RETURNS TRIGGER AS $$
@@ -150,15 +214,17 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
-DROP TRIGGER IF EXISTS update_reg_subjects_updated_at  ON reg_subjects;
-DROP TRIGGER IF EXISTS update_reg_classes_updated_at   ON reg_classes;
-DROP TRIGGER IF EXISTS update_reg_users_updated_at     ON reg_users;
-DROP TRIGGER IF EXISTS update_reg_documents_updated_at ON reg_documents;
+DROP TRIGGER IF EXISTS update_reg_subjects_updated_at    ON reg_subjects;
+DROP TRIGGER IF EXISTS update_reg_classes_updated_at     ON reg_classes;
+DROP TRIGGER IF EXISTS update_reg_users_updated_at       ON reg_users;
+DROP TRIGGER IF EXISTS update_reg_documents_updated_at   ON reg_documents;
+DROP TRIGGER IF EXISTS update_reg_assignments_updated_at ON reg_assignments;
 
-CREATE TRIGGER update_reg_subjects_updated_at  BEFORE UPDATE ON reg_subjects  FOR EACH ROW EXECUTE FUNCTION reg_update_updated_at_column();
-CREATE TRIGGER update_reg_classes_updated_at   BEFORE UPDATE ON reg_classes   FOR EACH ROW EXECUTE FUNCTION reg_update_updated_at_column();
-CREATE TRIGGER update_reg_users_updated_at     BEFORE UPDATE ON reg_users     FOR EACH ROW EXECUTE FUNCTION reg_update_updated_at_column();
-CREATE TRIGGER update_reg_documents_updated_at BEFORE UPDATE ON reg_documents FOR EACH ROW EXECUTE FUNCTION reg_update_updated_at_column();
+CREATE TRIGGER update_reg_subjects_updated_at    BEFORE UPDATE ON reg_subjects    FOR EACH ROW EXECUTE FUNCTION reg_update_updated_at_column();
+CREATE TRIGGER update_reg_classes_updated_at     BEFORE UPDATE ON reg_classes     FOR EACH ROW EXECUTE FUNCTION reg_update_updated_at_column();
+CREATE TRIGGER update_reg_users_updated_at       BEFORE UPDATE ON reg_users       FOR EACH ROW EXECUTE FUNCTION reg_update_updated_at_column();
+CREATE TRIGGER update_reg_documents_updated_at   BEFORE UPDATE ON reg_documents   FOR EACH ROW EXECUTE FUNCTION reg_update_updated_at_column();
+CREATE TRIGGER update_reg_assignments_updated_at BEFORE UPDATE ON reg_assignments FOR EACH ROW EXECUTE FUNCTION reg_update_updated_at_column();
 
 -- ---------- SIMILARITY SEARCH RPC (school-scoped, 1536-dim) ----------
 CREATE OR REPLACE FUNCTION reg_match_embeddings(
@@ -192,6 +258,40 @@ BEGIN
     WHERE e.subject_id = match_subject_id
       AND e.class_id   = match_class_id
       AND e.school_id  = match_school_id
+      AND 1 - (e.embedding <=> query_embedding) > match_threshold
+    ORDER BY e.embedding <=> query_embedding
+    LIMIT match_count;
+END;
+$$;
+
+-- ---------- SIMILARITY SEARCH RPC (school-wide, subject-agnostic) ----------
+CREATE OR REPLACE FUNCTION reg_match_embeddings_school(
+    query_embedding vector(1536),
+    match_school_id UUID,
+    match_count INT DEFAULT 6,
+    match_threshold FLOAT DEFAULT 0.15
+)
+RETURNS TABLE (
+    id UUID,
+    content TEXT,
+    page_number INT,
+    chunk_index INT,
+    metadata JSONB,
+    similarity FLOAT
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        e.id,
+        e.content,
+        e.page_number,
+        e.chunk_index,
+        e.metadata,
+        1 - (e.embedding <=> query_embedding) AS similarity
+    FROM reg_embeddings e
+    WHERE e.school_id = match_school_id
       AND 1 - (e.embedding <=> query_embedding) > match_threshold
     ORDER BY e.embedding <=> query_embedding
     LIMIT match_count;

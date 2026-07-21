@@ -158,6 +158,13 @@ for _gw in (
 from app.edu.routes import router as edu_router
 app.include_router(edu_router)
 
+# ==========================================
+# BUSINESS (Tara) — voice-first shop assistant. Fully isolated (biz_* tables);
+# does not touch the school/reg_ data. Channel-agnostic: web now, WhatsApp later.
+# ==========================================
+from app.business.routes import router as business_router
+app.include_router(business_router)
+
 # Mount static files (CSS, JS, etc.)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
