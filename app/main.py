@@ -165,6 +165,10 @@ app.include_router(edu_router)
 from app.business.routes import router as business_router
 app.include_router(business_router)
 
+# WhatsApp Cloud API channel for the business section (webhook + replies).
+from app.business.whatsapp import router as business_whatsapp_router
+app.include_router(business_whatsapp_router)
+
 # Mount static files (CSS, JS, etc.)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 

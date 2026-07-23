@@ -572,38 +572,43 @@ async def me(user: dict = Depends(get_current_business_user)):
 # ==========================================================================
 # THE MESSAGE PIPELINE
 # ==========================================================================
-@router.post("/message")
-@surface_errors
-async def message(
-    text: str = Form(""),
-    file: UploadFile = File(None),
-    user: dict = Depends(get_current_business_user),
-):
-    """Record or answer. Accepts text and/or an attachment (voice note or a
-    photo of the notebook)."""
+_AUDIO_EXTS = (".wav", ".mp3", ".m4a", ".ogg", ".oga", ".webm", ".amr", ".aac")
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+
+
+async def _process_message(user: dict, text: str = "", data: Optional[bytes] = None,
+                           filename: str = "", mime: str = "") -> dict:
+    """The core Tara pipeline, shared by the web API and the WhatsApp webhook.
+
+    Takes raw text and/or an attachment (voice note or photo), records or
+    answers, and returns {reply, intent, message_id, recorded}. Never raises for
+    ordinary bad input — it returns a friendly reply instead, so a WhatsApp
+    sender always gets an answer.
+    """
     user_id = user["id"]
     source = "text"
     said = (text or "").strip()
     image_url: Optional[str] = None
 
-    if file is not None and file.filename:
-        data = await file.read()
-        mime = (file.content_type or "").lower()
-        if mime.startswith("audio") or file.filename.lower().endswith((".wav", ".mp3", ".m4a", ".ogg", ".webm")):
+    if data:
+        m = (mime or "").lower()
+        fn = (filename or "").lower()
+        if m.startswith("audio") or fn.endswith(_AUDIO_EXTS):
             source = "voice"
-            transcript = await transcribe_audio(data, file.filename, mime)
+            transcript = await transcribe_audio(data, filename or "audio.ogg", mime or "audio/ogg")
             if not transcript.strip():
                 msg = "I couldn't catch that — please record again, a little closer to the phone."
                 _save_message(user_id, "assistant", msg)
-                return {"reply": msg, "intent": "error", "recorded": 0}
+                return {"reply": msg, "intent": "error", "recorded": 0, "message_id": None}
             said = (said + " " if said else "") + transcript
-        elif mime.startswith("image") or file.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+        elif m.startswith("image") or fn.endswith(_IMAGE_EXTS):
             source = "photo"
             from app.gateway.routes.llm_clients import image_data_url
             image_url = image_data_url(data, mime or "image/jpeg")
 
     if not said and image_url is None:
-        raise HTTPException(status_code=400, detail="Send a message, a voice note, or a photo.")
+        return {"reply": "Send a message, a voice note, or a photo.",
+                "intent": "error", "recorded": 0, "message_id": None}
 
     recent = (_db().table("biz_messages").select("role,content")
               .eq("user_id", user_id).order("created_at", desc=True).limit(6).execute().data or [])
@@ -640,6 +645,23 @@ async def message(
     _save_message(user_id, "assistant", reply)
     return {"reply": reply, "intent": intent, "message_id": user_msg_id,
             "recorded": len(txs) if intent in ("record", "correction") else 0}
+
+
+@router.post("/message")
+@surface_errors
+async def message(
+    text: str = Form(""),
+    file: UploadFile = File(None),
+    user: dict = Depends(get_current_business_user),
+):
+    """Record or answer. Accepts text and/or an attachment (voice note or a
+    photo of the notebook)."""
+    data = filename = mime = None
+    if file is not None and file.filename:
+        data = await file.read()
+        filename = file.filename
+        mime = (file.content_type or "").lower()
+    return await _process_message(user, text=text, data=data, filename=filename, mime=mime)
 
 
 @router.post("/messages/{message_id}/edit")

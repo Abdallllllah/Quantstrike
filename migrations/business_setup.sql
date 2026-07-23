@@ -85,6 +85,13 @@ CREATE TABLE IF NOT EXISTS biz_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_biz_messages_user ON biz_messages(user_id, created_at);
 
+-- ---------- WHATSAPP de-duplication (webhook retries) ----------
+CREATE TABLE IF NOT EXISTS biz_wa_events (
+    wamid      TEXT PRIMARY KEY,          -- WhatsApp message id (wamid.…)
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_biz_wa_events_time ON biz_wa_events(created_at);
+
 -- ---------- updated_at trigger (self-contained) ----------
 CREATE OR REPLACE FUNCTION biz_set_updated_at() RETURNS TRIGGER AS $$
 BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
