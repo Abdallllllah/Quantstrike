@@ -742,3 +742,143 @@ async def overview(user: dict = Depends(get_current_business_user)):
     st = _business_stats(user["id"])
     desc = await _describe_business(st)
     return {"stats": st, "description": desc}
+
+
+# ==========================================================================
+# PDF REPORTS — day / week / month / quarter / year
+# ==========================================================================
+def _period_range(period: str):
+    """Return (start_datetime, title, human range) for a reporting period."""
+    n = datetime.now(timezone.utc)
+    p = (period or "day").strip().lower()
+    if p in ("day", "daily", "today"):
+        start = n.replace(hour=0, minute=0, second=0, microsecond=0)
+        return start, "Daily report", start.strftime("%d %B %Y")
+    if p in ("week", "weekly"):
+        start = (n - timedelta(days=n.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        return start, "Weekly report", f"{start.strftime('%d %b')} – {n.strftime('%d %b %Y')}"
+    if p in ("month", "monthly"):
+        start = n.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return start, "Monthly report", start.strftime("%B %Y")
+    if p in ("quarter", "quarterly"):
+        q = (n.month - 1) // 3
+        start = n.replace(month=q * 3 + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        return start, "Quarterly report", f"Q{q + 1} {n.year} · {start.strftime('%b')}–{n.strftime('%b %Y')}"
+    if p in ("year", "yearly", "annual", "annually"):
+        start = n.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        return start, "Annual report", str(n.year)
+    raise HTTPException(status_code=400, detail="period must be one of: day, week, month, quarter, year")
+
+
+def _qty_str(v) -> str:
+    q = _num(v)
+    if not q:
+        return "—"
+    return str(int(q)) if float(q).is_integer() else str(q)
+
+
+def _report_data(user: dict, period: str) -> dict:
+    uid = user["id"]
+    start, title, range_label = _period_range(period)
+    rows = (_db().table("biz_transactions").select("*")
+            .eq("user_id", uid).gte("occurred_at", start.isoformat())
+            .order("occurred_at", desc=True).limit(2000).execute().data or [])
+
+    sales = [r for r in rows if r.get("type") == "sale"]
+    total_sales = sum(_num(r.get("amount")) or 0 for r in sales)
+    credit_given = sum(_num(r.get("credit_amount")) or 0 for r in rows if r.get("type") in ("sale", "credit"))
+    payments = sum(_num(r.get("amount")) or 0 for r in rows if r.get("type") == "payment")
+    cash_out = sum(_num(r.get("amount")) or 0 for r in rows if r.get("type") in ("restock", "expense"))
+    profit = 0.0
+    for r in sales:
+        cp = _num(r.get("cost_price"))
+        if cp is not None:
+            profit += (_num(r.get("amount")) or 0) - cp * (_num(r.get("quantity")) or 1)
+    net_cash = total_sales - credit_given + payments - cash_out
+
+    # Group sales by day (short periods) or by month (quarter / year).
+    by_month = (period or "").strip().lower() in ("quarter", "quarterly", "year", "yearly", "annual", "annually")
+    buckets: dict = {}
+    for r in sales:
+        ts = (r.get("occurred_at") or "")[:10]
+        if not ts:
+            continue
+        key = ts[:7] if by_month else ts
+        buckets[key] = buckets.get(key, 0) + (_num(r.get("amount")) or 0)
+    breakdown = [{"label": k, "sales_f": _fmt(v)} for k, v in sorted(buckets.items())]
+    if len(breakdown) < 2:
+        breakdown = []
+
+    items: dict = {}
+    for r in sales:
+        if r.get("item_name"):
+            items[r["item_name"]] = items.get(r["item_name"], 0) + (_num(r.get("amount")) or 0)
+    top = sorted(items.items(), key=lambda x: x[1], reverse=True)[:8]
+
+    debts = _debts(uid)
+    limit = 60
+    txs = [{
+        "date": (r.get("occurred_at") or "")[:10],
+        "type": (r.get("type") or "").title(),
+        "item": r.get("item_name"),
+        "qty": _qty_str(r.get("quantity")),
+        "amount_f": _fmt(r.get("amount")),
+        "customer": r.get("customer_name"),
+    } for r in rows[:limit]]
+
+    return {
+        "shop": user.get("shop_name") or user.get("name") or "My shop",
+        "period_label": title,
+        "range_label": range_label,
+        "currency": CURRENCY,
+        "generated_at": datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC"),
+        "kpis": {
+            "sales_f": _fmt(total_sales), "credit_given_f": _fmt(credit_given),
+            "payments_f": _fmt(payments), "cash_out_f": _fmt(cash_out),
+            "net_cash_f": _fmt(net_cash), "profit_f": _fmt(profit), "count": len(sales),
+        },
+        "breakdown": breakdown,
+        "top_items": [{"item": k, "sold_f": _fmt(v)} for k, v in top],
+        "debts": [{"name": d["name"], "balance_f": _fmt(d["balance"])} for d in debts],
+        "transactions": txs,
+        "transactions_total": len(rows),
+        "transactions_truncated": len(rows) > limit,
+    }
+
+
+async def _report_summary(d: dict) -> str:
+    """Short narrative for the top of the report (best-effort)."""
+    from app.gateway.routes.llm_clients import async_openrouter_client, GEMINI_MODEL
+    facts = {
+        "period": d.get("period_label"), "range": d.get("range_label"),
+        "kpis": d.get("kpis"), "top_items": d.get("top_items"),
+        "people_who_owe": len(d.get("debts") or []),
+    }
+    prompt = (
+        "You are Tara, a shop assistant. Write 3 to 4 plain-text sentences summarising how this shop "
+        "performed for the period, using ONLY the figures given (FCFA). Mention total sales, profit, "
+        "what sold best, money owed, and end with one practical suggestion. No markdown, no asterisks, "
+        "no bullet points.\n\n" + json.dumps(facts, ensure_ascii=False)
+    )
+    try:
+        resp = await async_openrouter_client.chat.completions.create(
+            model=GEMINI_MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.4,
+        )
+        return (resp.choices[0].message.content or "").strip() if resp.choices else ""
+    except Exception:
+        return ""
+
+
+@router.get("/report/pdf")
+@surface_errors
+async def report_pdf(period: str = "day", user: dict = Depends(get_current_business_user)):
+    """Download a branded PDF report for day | week | month | quarter | year."""
+    data = _report_data(user, period)
+    data["summary"] = await _report_summary(data)
+    from app.business.report import render_report_pdf
+    pdf = render_report_pdf(data)
+    p = (period or "day").strip().lower()
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="tara-{p}-report.pdf"'},
+    )
