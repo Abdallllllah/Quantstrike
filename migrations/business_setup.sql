@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS biz_users (
     name       VARCHAR(120),
     shop_name  VARCHAR(160),
     language   VARCHAR(10) DEFAULT 'en',
-    currency   VARCHAR(10) DEFAULT 'FCFA',
+    currency   VARCHAR(10) DEFAULT 'KSh',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS biz_transactions (
     item_id    UUID REFERENCES biz_items(id) ON DELETE SET NULL,
     quantity   NUMERIC(14,3),
     unit       VARCHAR(30),
-    amount        NUMERIC(14,2),            -- total value (FCFA)
+    amount        NUMERIC(14,2),            -- total value (KSh)
     credit_amount NUMERIC(14,2) DEFAULT 0,  -- portion of a sale given on credit
     unit_price NUMERIC(14,2),
     cost_price NUMERIC(14,2),               -- per-unit cost (for profit)

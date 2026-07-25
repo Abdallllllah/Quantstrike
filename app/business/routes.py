@@ -54,13 +54,12 @@ def _num(v):
 
 
 def _fmt(n) -> str:
-    """Format a money amount with thin-space thousands separators (46 500)."""
+    """Format a money amount with comma thousands separators (46,500)."""
     try:
         v = float(n or 0)
     except (TypeError, ValueError):
         v = 0.0
-    s = f"{int(round(v)):,}".replace(",", " ")
-    return s
+    return f"{int(round(v)):,}"
 
 
 def _now_iso() -> str:
@@ -75,14 +74,14 @@ def _month_start() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-01")
 
 
-CURRENCY = "FCFA"
+CURRENCY = "KSh"
 
 
 # ==========================================================================
 # request models
 # ==========================================================================
 class RegisterRequest(BaseModel):
-    phone: str = Field(..., example="+237670000000")
+    phone: str = Field(..., example="+254700000000")
     name: Optional[str] = None
     shop_name: Optional[str] = None
 
@@ -146,9 +145,9 @@ def _save_message(user_id: str, role: str, content: str) -> Optional[str]:
 # ==========================================================================
 # LLM extraction — the "key thing"
 # ==========================================================================
-_EXTRACT_SYSTEM = """You are the parser for a shop assistant used by African provision-shop keepers
-(Cameroon; money is in FCFA). Read the shopkeeper's message (which may be French, English, Pidgin or
-Swahili, possibly from a photo of a notebook) and return STRICT JSON describing what to do.
+_EXTRACT_SYSTEM = """You are the parser for a shop assistant used by African duka / provision-shop keepers
+(Kenya; money is in Kenyan Shillings, KSh). Read the shopkeeper's message (which may be English, Swahili
+or Sheng, possibly from a photo of a notebook) and return STRICT JSON describing what to do.
 
 Classify the intent and extract every transaction mentioned. JSON shape:
 {
@@ -159,7 +158,7 @@ Classify the intent and extract every transaction mentioned. JSON shape:
       "item": "sugar" | null,
       "quantity": 4 | null,
       "unit": "kg" | null,
-      "amount": 10400,               // total value in FCFA (number, no separators)
+      "amount": 10400,               // total value in KSh (number, no separators)
       "unit_price": 2600 | null,
       "cost_price": null,            // per-unit BUY price, only for restock or if stated
       "credit_amount": 0,            // portion of a SALE given on credit (0 if fully paid)
@@ -230,7 +229,7 @@ async def _advice_reply(text: str, recent: list) -> str:
     """Free-form reply for pricing advice / small talk."""
     from app.gateway.routes.llm_clients import async_openrouter_client, GEMINI_MODEL
     msgs = [{"role": "system", "content": (
-        "You are Tara, a friendly, concise shop assistant for African provision-shop keepers (FCFA). "
+        "You are Tara, a friendly, concise shop assistant for Kenyan duka keepers (KSh). "
         "Reply in the language the shopkeeper used. Plain text, short. For pricing questions, suggest a "
         "sensible selling price and margin. Be practical and warm."
     )}]
@@ -494,7 +493,7 @@ def _business_stats(user_id: str) -> dict:
 async def _describe_business(stats: dict) -> str:
     from app.gateway.routes.llm_clients import async_openrouter_client, GEMINI_MODEL
     prompt = (
-        "You are Tara, a warm shop assistant. Using ONLY the figures below (all in FCFA), write a short "
+        "You are Tara, a warm shop assistant. Using ONLY the figures below (all in KSh), write a short "
         "plain-text summary (3 to 5 sentences) of how the shop is doing: how much has been sold "
         "(today / this week / this month), the profit, the best-selling items, how much money is owed to "
         "the shopkeeper, and ONE practical suggestion. Be encouraging and concrete. No markdown, no "
@@ -879,7 +878,7 @@ async def _report_summary(d: dict) -> str:
     }
     prompt = (
         "You are Tara, a shop assistant. Write 3 to 4 plain-text sentences summarising how this shop "
-        "performed for the period, using ONLY the figures given (FCFA). Mention total sales, profit, "
+        "performed for the period, using ONLY the figures given (KSh). Mention total sales, profit, "
         "what sold best, money owed, and end with one practical suggestion. No markdown, no asterisks, "
         "no bullet points.\n\n" + json.dumps(facts, ensure_ascii=False)
     )

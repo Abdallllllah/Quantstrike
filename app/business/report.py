@@ -72,7 +72,7 @@ def _table(headers, rows, widths, st):
 
 def render_report_pdf(d: dict) -> bytes:
     st = _styles()
-    cur = d.get("currency", "FCFA")
+    cur = d.get("currency", "KSh")
     k = d.get("kpis", {})
 
     def header_footer(canvas, doc_):

@@ -135,7 +135,7 @@ const LS = {
 };
 let pendingFile = null, busy = false;
 
-function fmt(n){ return Math.round(Number(n||0)).toLocaleString('en-US').replace(/,/g,' '); }
+function fmt(n){ return Math.round(Number(n||0)).toLocaleString('en-KE'); }
 
 async function api(path, opts={}){
   const headers = opts.headers || {};
@@ -261,7 +261,7 @@ async function loadDash(){
     const s=await api('/api/business/summary');
     const t=s.today||{};
     cards.innerHTML=`
-      <div class="card wide"><div class="v">${fmt(t.drawer)} ${s.currency||'FCFA'}</div><div class="l">Drawer should hold</div></div>
+      <div class="card wide"><div class="v">${fmt(t.drawer)} ${s.currency||'KSh'}</div><div class="l">Drawer should hold</div></div>
       <div class="card"><div class="v">${fmt(t.sales)}</div><div class="l">Sales today</div></div>
       <div class="card"><div class="v">${fmt(t.credit_given)}</div><div class="l">Credit given</div></div>
       <div class="card"><div class="v">${fmt(s.profit_month)}</div><div class="l">Profit (month)</div></div>
