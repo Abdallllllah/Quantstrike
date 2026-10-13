@@ -691,6 +691,98 @@ async def chat_pdf(conversation_id: str, user: dict = Depends(get_current_user))
     )
 
 
+# ==========================================================================
+# PAST PAPERS — search and download GCE papers only (never ordinary notes)
+# ==========================================================================
+_PAPERS_TTL = 60  # seconds
+_papers_cache: dict = {}
+
+
+def _load_papers(school_id) -> list:
+    """All past papers in the school's knowledge base, as paper records.
+    Papers are recognised from the filename (see app/edu/papers.py); files
+    uploaded more than once appear once. Cached briefly so search-as-you-type
+    doesn't hit the database on every keystroke."""
+    import time
+    from app.edu import papers as P
+
+    key = str(school_id)
+    hit = _papers_cache.get(key)
+    if hit and time.monotonic() - hit[0] < _PAPERS_TTL:
+        return hit[1]
+
+    rows = (
+        _db().table("reg_documents").select("id,filename,doc_type,subject_id,chunk_count")
+        .eq("school_id", key).limit(5000).execute().data
+    ) or []
+    subjects = {s["id"]: s["name"] for s in (_db().table("reg_subjects").select("id,name").execute().data or [])}
+
+    by_name: dict = {}
+    for r in rows:
+        best = by_name.get(r["filename"])
+        if best is None or (r.get("chunk_count") or 0) > (best.get("chunk_count") or 0):
+            by_name[r["filename"]] = r
+    records = [p for p in (P.classify(r, subjects.get(r.get("subject_id"))) for r in by_name.values()) if p]
+    _papers_cache[key] = (time.monotonic(), records)
+    return records
+
+
+@router.get("/papers")
+@surface_errors
+async def search_papers(
+    q: str = "",
+    subject: str = "",
+    year: Optional[int] = None,
+    paper: Optional[int] = None,
+    limit: int = 50,
+    user: dict = Depends(get_current_user),
+):
+    """Search GCE past papers. `q` is free text — e.g. "physics 2020",
+    "chem paper 2", "maths 2024 p1" — and every word must match. `subject`,
+    `year` and `paper` are optional exact filters. Empty `q` lists everything,
+    newest first."""
+    import asyncio
+    from app.edu import papers as P
+
+    records = await asyncio.to_thread(_load_papers, user.get("school_id"))
+    found = P.search(records, q=q, subject=subject, year=year, paper=paper)
+    limit = max(1, min(limit, 200))
+    return {
+        "count": len(found),
+        "papers": [
+            {**P.public(p), "download_url": f"/api/edu/papers/{p['id']}/download"}
+            for p in found[:limit]
+        ],
+    }
+
+
+@router.get("/papers/{paper_id}/download")
+@surface_errors
+async def download_paper(paper_id: str, user: dict = Depends(get_current_user)):
+    """Download one past paper as a PDF. Only documents recognised as past
+    papers in the caller's school can be fetched this way."""
+    import asyncio
+    from app.db.storage import DOCUMENTS_BUCKET
+
+    records = await asyncio.to_thread(_load_papers, user.get("school_id"))
+    record = next((p for p in records if str(p["id"]) == paper_id), None)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    try:
+        # Files sit at the bucket root keyed by filename (not reg_documents.file_path).
+        data = await asyncio.to_thread(
+            _db().storage.from_(DOCUMENTS_BUCKET).download, record["filename"]
+        )
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=404, detail="The file for this paper is missing from storage")
+    safe_name = re.sub(r'[^A-Za-z0-9._ -]', "_", record["filename"])
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{safe_name}"'},
+    )
+
+
 @router.post("/topup")
 @surface_errors
 async def topup(payload: TopUpRequest, user: dict = Depends(get_current_user)):
