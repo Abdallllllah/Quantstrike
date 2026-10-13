@@ -735,16 +735,15 @@ async def search_papers(
     year: Optional[int] = None,
     paper: Optional[int] = None,
     limit: int = 50,
-    user: dict = Depends(get_current_user),
 ):
     """Search GCE past papers. `q` is free text — e.g. "physics 2020",
     "chem paper 2", "maths 2024 p1" — and every word must match. `subject`,
     `year` and `paper` are optional exact filters. Empty `q` lists everything,
-    newest first."""
+    newest first. Public for now (no login): serves the shared 'general' school."""
     import asyncio
     from app.edu import papers as P
 
-    records = await asyncio.to_thread(_load_papers, user.get("school_id"))
+    records = await asyncio.to_thread(_load_papers, _get_or_create_general_school().id)
     found = P.search(records, q=q, subject=subject, year=year, paper=paper)
     limit = max(1, min(limit, 200))
     return {
@@ -758,13 +757,13 @@ async def search_papers(
 
 @router.get("/papers/{paper_id}/download")
 @surface_errors
-async def download_paper(paper_id: str, user: dict = Depends(get_current_user)):
-    """Download one past paper as a PDF. Only documents recognised as past
-    papers in the caller's school can be fetched this way."""
+async def download_paper(paper_id: str):
+    """Download one past paper as a PDF. Public for now (no login). Only
+    documents recognised as past papers can be fetched this way — never notes."""
     import asyncio
     from app.db.storage import DOCUMENTS_BUCKET
 
-    records = await asyncio.to_thread(_load_papers, user.get("school_id"))
+    records = await asyncio.to_thread(_load_papers, _get_or_create_general_school().id)
     record = next((p for p in records if str(p["id"]) == paper_id), None)
     if record is None:
         raise HTTPException(status_code=404, detail="Paper not found")
