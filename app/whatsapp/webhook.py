@@ -12,9 +12,8 @@ from typing import Optional
 from fastapi import APIRouter, Request, HTTPException, Query
 from fastapi.responses import PlainTextResponse, JSONResponse
 
-from app.controller.orchestrator import get_orchestrator
 from app.whatsapp.client import WhatsAppClient
-from app.whatsapp.formatter import format_for_whatsapp
+from app.whatsapp.formatter import format_for_whatsapp, split_long_message
 
 router = APIRouter(prefix="/api/whatsapp", tags=["whatsapp"])
 
@@ -63,10 +62,10 @@ async def handle_webhook(request: Request):
         # Parse webhook payload
         payload = await request.json()
         
-        # Validate webhook signature (optional but recommended)
-        # signature = request.headers.get("X-Hub-Signature-256")
-        # if not validate_signature(await request.body(), signature):
-        #     raise HTTPException(status_code=401, detail="Invalid signature")
+        # Reject forged webhooks when WHATSAPP_APP_SECRET is configured.
+        if os.getenv("WHATSAPP_APP_SECRET") and not validate_signature(
+                await request.body(), request.headers.get("X-Hub-Signature-256")):
+            raise HTTPException(status_code=401, detail="Invalid signature")
         
         # Extract message data
         message_data = extract_message_from_payload(payload)
@@ -78,29 +77,15 @@ async def handle_webhook(request: Request):
         phone_number = message_data["phone_number"]
         message_text = message_data["text"]
         message_id = message_data["message_id"]
-        
-        print(f"Received message from {phone_number}: {message_text[:50]}...")
-        
-        # Process through orchestrator
-        orchestrator = get_orchestrator()
-        result = await orchestrator.process_message(
-            phone_number=phone_number,
-            message_content=message_text,
-            whatsapp_message_id=message_id,
-        )
-        
-        # Format response for WhatsApp
-        response_text = format_for_whatsapp(result.get("response", ""))
-        
-        # Send response via WhatsApp
+
+        # Same student, allowance and profile as the app (Carati chat service).
+        response_text = await answer_whatsapp(phone_number, message_text, message_id)
+
         client = get_whatsapp_client()
-        await client.send_message(phone_number, response_text)
-        
-        return JSONResponse({
-            "status": "ok",
-            "message_id": message_id,
-            "intent": result.get("intent"),
-        })
+        for part in split_long_message(format_for_whatsapp(response_text)):
+            await client.send_message(phone_number, part)
+
+        return JSONResponse({"status": "ok", "message_id": message_id})
         
     except Exception as e:
         print(f"Webhook error: {e}")
@@ -190,3 +175,35 @@ def validate_signature(payload: bytes, signature: str) -> bool:
     ).hexdigest()
     
     return hmac.compare_digest(signature, expected)
+
+
+async def answer_whatsapp(raw_phone: str, text: str, wamid: str) -> str:
+    """Answer a WhatsApp message through the Carati chat service. One thread per
+    student per WAT day, so the follow-up rule works the same as in the app.
+    The WhatsApp message id is the idempotency key: Meta's retries are free."""
+    import uuid as _uuid
+    from app.edu import allowance, chat_service
+    from app.edu.db import db, general_school_id, one, run
+    from app.edu.phone import normalize_phone
+
+    phone = normalize_phone(raw_phone)
+    if not phone:
+        return "Sorry, I couldn't read your number."
+
+    def find_or_create():
+        u = one(db().table("reg_users").select("*").eq("phone_number", phone))
+        return u or db().table("reg_users").insert(
+            {"phone_number": phone, "role": "student", "school_id": general_school_id()}).execute().data[0]
+
+    user = await run(find_or_create)
+    day = allowance.wat_now().date().isoformat()
+    conv = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"carati:wa:{user['id']}:{day}"))
+    try:
+        reply = await chat_service.ask(user, text, conversation_id=conv, client_ref=f"wa:{wamid}", channel="whatsapp")
+    except chat_service.CapReached:
+        p = allowance.cap_payload("question")
+        return (p["message"] + " A parent can buy a question pack in the Carati app, "
+                "or come back after midnight.")
+    left = (await run(allowance.status, user["id"]))["questions"]["left"]
+    suffix = f"\n\n({left} free questions left today)" if reply["counted"] else ""
+    return reply["answer"] + suffix

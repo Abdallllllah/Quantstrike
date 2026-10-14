@@ -29,6 +29,8 @@ from app.gateway.database import supabase
 from app.gateway.routes.llm_clients import async_openrouter_client, GEMINI_MODEL, image_data_url
 from app.gateway.routes.text_cleanup import clean_math_notation, clean_question_strings
 
+from app.gateway.identity import all_ids, resolve_student, resolve_student_id
+
 router = APIRouter(prefix="/api/practice", tags=["Practice"])
 
 # ---------------------------------------------------------------------------
@@ -52,23 +54,8 @@ UUID_RE = re.compile(
 
 
 def _resolve_user_uuid(raw_id: str) -> Optional[str]:
-    if not raw_id:
-        return None
-    if UUID_RE.match(raw_id):
-        return raw_id
-    try:
-        res = (
-            supabase.table("users")
-            .select("id")
-            .eq("phone_number", raw_id)
-            .limit(1)
-            .execute()
-        )
-        if res.data:
-            return res.data[0]["id"]
-    except Exception as e:
-        print(f"User UUID lookup failed for {raw_id!r}: {e}")
-    return None
+    """reg_users.id for a phone number, reg_users id or old gateway users.id."""
+    return resolve_student_id(raw_id)
 
 
 GENERATION_PROMPT_TEMPLATE = """\
@@ -765,7 +752,7 @@ async def list_sessions(user_id: str, limit: int = 20):
         supabase.table("practice_sessions")
         .select("id, subject, topics, class_level, difficulty, score, status, "
                 "started_at, completed_at, questions, answers")
-        .eq("userid", user_uuid)
+        .in_("userid", all_ids(resolve_student(user_id) or {"id": user_uuid}))
         .order("started_at", desc=True)
         .limit(limit)
         .execute()

@@ -115,6 +115,51 @@ timestamps. The self-reference makes data-only restores need `--disable-triggers
 
 `updated_at` triggers (`reg_update_updated_at_column`) on subjects, classes, users, documents, assignments.
 
+### 4.1b Carati v1 (migration `migrations/009_carati_v1.sql`, Requirements v0.2)
+
+Not yet in `schema.sql` until it is re-exported after the migration runs.
+
+**reg_users additions**: `level` (`lower_sixth` | `upper_sixth`), `subjects` text[] (subject slugs),
+`school_name`, `region`, `exam_year`, `onboarded_at`, `last_seen_at`, `legacy_user_id` (the same person's
+old gateway `users.id`). Role check now `student` | `teacher` | `admin` | `school_admin` (the last is legacy,
+unused). Phones are stored normalised as `+<digits>` (`reg_normalize_phone()`; bare 9-digit Cameroon numbers
+get `+237`). Students are identified by phone only: no names are collected.
+
+One identity: the migration copied WhatsApp-gateway `users` into `reg_users` (phone match, no names),
+linking them through `legacy_user_id`. The gateway code now resolves students in `reg_users`
+(`app/gateway/identity.py`); its `messages` / `practice_sessions` rows written before the merge stay under the
+legacy id and are read through both ids.
+
+| Table | Purpose |
+|---|---|
+| `reg_otp_codes` | Hashed 6-digit login codes (phone, expiry, attempts). |
+| `reg_syllabus_topics` | subject → topic → sub-topic (`parent_id`), `code`, `verified` (false = auto-created by tagging). |
+| `reg_messages` (+cols) | `topic_id`, `subtopic_id`, `counts_against_allowance`, `allowance_source`, `cached`, `rating` (±1), `unsure`, `is_reexplanation`, `channel` (app/whatsapp), `client_ref` (idempotency, unique per user), `review_status`, `correction`. |
+| `reg_answer_cache` | Cached answers by normalised-question hash; `disabled` after a thumbs-down; corrections overwrite it. |
+| `reg_daily_usage` | (user, WAT day) free units used: `questions_used`, `papers_used`. |
+| `reg_wallets` | Paid `question_credits`, `paper_credits`, `season_pass_until`. |
+| `reg_usage_events` | One row per unit spent; unique (user, kind, day, ref) makes retries free. |
+| `reg_past_papers` | Paper bank, one row per past-paper document (`years[]`, `paper_numbers[]`, `kind`). Filled by `papers_service.sync_papers()` from `reg_documents` filenames. |
+| `reg_past_questions` | Questions extracted from a paper on first use (`number`, `text`, `marks`, `marking_scheme`, `topic_id`). |
+| `reg_paper_unlocks` | (user, paper, WAT day) opens; `completed_at` once every question has an attempt. |
+| `reg_attempts` | Marked answers: marks, `breakdown` jsonb (M/A/B points), `marked_by` llm/teacher/pending_teacher. |
+| `reg_topic_stats` | Profile: per (user, topic) asked / attempted / marks / unsure / last activity. |
+| `reg_teacher_profiles` | Teacher vetting (ID, credential, school, results evidence), `verification_status`, `revenue_share` 0.65–0.75, payout wallet. |
+| `reg_tracks`, `reg_track_steps`, `reg_track_items` | Revision tracks (dated weekly steps, items: note/document/audio/worked_question/question). Files in private bucket `track_content`. |
+| `reg_enrolments`, `reg_step_progress` | Paid enrolment (parent phone, payment), per-step completion. |
+| `reg_track_posts` | Weekly group Q&A; `author_id` NULL = answered by Carati; one teacher `clarification` per week. |
+| `reg_payments`, `reg_payouts` | FCFA ledger (track / question_pack / paper_pack / season_pass), teacher payouts. |
+
+Functions (all `service_role` only):
+- `reg_consume_allowance(user, kind, ref, subject, free_cap, raised_cap)`: the only place units are spent.
+  Order: free daily unit, then season pass, then paid credit. Raised cap applies when the subject has an
+  active track enrolment (`reg_has_raised_cap`). Per-user advisory lock, so no double spending.
+- `reg_grant_payment(payment)`: marks paid and grants credits / pass / enrolment exactly once.
+- `reg_bump_topic_stat(...)`: atomic profile counters. `reg_wat_today()`, `reg_normalize_phone()`.
+
+Old school-app tables (`reg_assignments`, `reg_assignment_targets`, `reg_assignment_submissions`) are no
+longer used by any code; they were left in place (no data dropped).
+
 ### 4.2 Tara (`biz_*`)
 
 - **biz_users**: `phone_number` (unique), `name`, `shop_name`, `language` (default `en`), `currency` (default `KSh`).

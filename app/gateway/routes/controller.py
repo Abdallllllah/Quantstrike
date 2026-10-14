@@ -1,3 +1,4 @@
+import uuid
 
 import os
 import re
@@ -21,6 +22,9 @@ from app.gateway.routes.text_cleanup import clean_math_notation
 
 load_dotenv()
 
+from app.edu import allowance, config as carati_config
+from app.gateway.identity import all_ids, resolve_student, resolve_student_id
+
 router = APIRouter(prefix="/api/chat", tags=["Master Controller"])
 
 # Frontend may pass either a UUID or the user's phone number as `user_id`.
@@ -32,23 +36,9 @@ UUID_RE = re.compile(
 
 
 def _resolve_user_uuid(raw_id: str) -> str | None:
-    if not raw_id:
-        return None
-    if UUID_RE.match(raw_id):
-        return raw_id
-    try:
-        res = (
-            supabase.table("users")
-            .select("id")
-            .eq("phone_number", raw_id)
-            .limit(1)
-            .execute()
-        )
-        if res.data:
-            return res.data[0]["id"]
-    except Exception as e:
-        print(f"User UUID lookup failed for {raw_id!r}: {e}")
-    return None
+    """reg_users.id for a phone number, reg_users id or old gateway users.id."""
+    return resolve_student_id(raw_id)
+
 
 # Configuration
 BASE_URL = os.getenv("BASE_URL") or f"http://127.0.0.1:{os.getenv('PORT', '8000')}"
@@ -94,65 +84,36 @@ def _looks_like_paper_detail(msg: str) -> bool:
         return True
     return any(p.match(text) for p in _PAPER_DETAIL_PATTERNS)
 
-# Daily student-message caps per tier. Counts only role='student' rows in the
-# `messages` table whose timestamp falls in the current UTC day.
-TIER_LIMITS = {1: 25, 2: 60, 3: 100}
-DEFAULT_TIER = 1
+# Daily limit: the shared Carati allowance (15 free questions/day, reset 00:00
+# WAT, then season pass / credits), the same counter the app uses. A new
+# problem counts; the next CARATI_FREE_FOLLOW_UPS messages in the same
+# conversation are free follow-ups.
+def _usage_snapshot(user_uuid: str) -> dict:
+    s = allowance.status(user_uuid)
+    q = s["questions"]
+    extra = 10**6 if s["season_pass_active"] else s["credits"]["questions"]
+    return {
+        "tier": "season_pass" if s["season_pass_active"] else "free",
+        "limit": q["cap"],
+        "used": q["used"],
+        "remaining": q["left"] + extra,
+        "credits": s["credits"]["questions"],
+        "resets_at": s["resets_at"],
+    }
 
 
-def _utc_day_start_iso() -> str:
-    # Use a date-only string (YYYY-MM-DD) for the gte filter. Postgres will
-    # interpret it as midnight at the column's tz. This avoids URL-encoding
-    # quirks with the `+00:00` suffix that previously caused the count to
-    # silently return 0 even when the user had sent messages today.
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
-def _get_user_tier(user_uuid: str) -> int:
+def _prior_student_turns(user_uuid: str, conversation_id: str | None) -> int:
+    if not conversation_id:
+        return 0
     try:
-        res = (
-            supabase.table("users")
-            .select("tier")
-            .eq("id", user_uuid)
-            .limit(1)
-            .execute()
-        )
-        if res.data:
-            return int(res.data[0].get("tier") or DEFAULT_TIER)
-    except Exception as e:
-        print(f"Tier lookup failed for {user_uuid}: {e}")
-    return DEFAULT_TIER
-
-
-def _count_today_student_messages(user_uuid: str) -> int:
-    try:
-        # Note: the messages table's primary key is `messageid`, not `id`.
-        # PostgREST errors out when you select a non-existent column, which
-        # was silently returning 0 here regardless of how many rows existed.
-        res = (
-            supabase.table("messages")
-            .select("messageid", count="exact")
-            .eq("userid", user_uuid)
-            .eq("role", "student")
-            .gte("timestamp", _utc_day_start_iso())
-            .execute()
-        )
+        res = (supabase.table("messages").select("messageid", count="exact")
+               .eq("userid", user_uuid).eq("role", "student")
+               .eq("conversation_id", conversation_id).execute())
         return int(res.count or 0)
     except Exception as e:
-        print(f"Daily message count failed for {user_uuid}: {e}")
+        print(f"Turn count failed: {e}")
         return 0
 
-
-def _usage_snapshot(user_uuid: str) -> dict:
-    tier = _get_user_tier(user_uuid)
-    limit = TIER_LIMITS.get(tier, TIER_LIMITS[DEFAULT_TIER])
-    used = _count_today_student_messages(user_uuid)
-    return {
-        "tier": tier,
-        "limit": limit,
-        "used": used,
-        "remaining": max(0, limit - used),
-    }
 
 redis_client = redis.from_url(
     os.getenv("REDIS_URL"),
@@ -595,25 +556,25 @@ async def master_controller(
     valid_conversation_id = conversation_id if UUID_RE.match(conversation_id or "") else None
     # Frontend may pass either a UUID or the user's phone number. Resolve once
     # so persistence (which requires a UUID) works without 422-ing.
-    resolved_user_uuid = _resolve_user_uuid(user_id)
+    student = resolve_student(user_id)
+    resolved_user_uuid = student["id"] if student else None
+    student_phone = student["phone_number"] if student else None
 
-    # Tier gate: only enforce when we can identify the user. Anonymous /
-    # unresolved callers fall through to the existing flow unchanged.
-    if resolved_user_uuid:
+    # Allowance gate: only a NEW problem can be refused; follow-ups never are,
+    # so a thread is never cut off mid-answer.
+    prior_turns = _prior_student_turns(resolved_user_uuid, valid_conversation_id) if resolved_user_uuid else 0
+    is_new_problem = prior_turns % (carati_config.FREE_FOLLOW_UPS + 1) == 0
+    if resolved_user_uuid and is_new_problem and not allowance.can_spend(resolved_user_uuid, "question", None):
         usage = _usage_snapshot(resolved_user_uuid)
-        if usage["remaining"] <= 0:
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "answer": (
-                        f"You've reached your daily limit of {usage['limit']} messages "
-                        f"on Tier {usage['tier']}. Your messages reset at midnight UTC, "
-                        f"or upgrade your tier for more."
-                    ),
-                    "intent": "limit_exceeded",
-                    "usage": usage,
-                },
-            )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "answer": allowance.cap_payload("question")["message"]
+                + " A parent can buy a question pack in the Carati app.",
+                "intent": "limit_exceeded",
+                "usage": usage,
+            },
+        )
 
     # Reject audio + text in the same request (text + image is fine).
     if (
@@ -812,7 +773,7 @@ async def master_controller(
                 # timeout).
                 rag_returned_answer = False
                 payload = {
-                    "user_id": user_id,
+                    "user_id": student_phone or user_id,
                     "message": smart_query,
                     "subject": subject,
                     "class_level": HARDCODED_CLASS,
@@ -871,6 +832,13 @@ async def master_controller(
         # which is the rewritten/contextualised version).
         transcription = transcript if (file and file.content_type and file.content_type.startswith("audio")) else None
 
+        if resolved_user_uuid and is_new_problem and intent != "off_topic" and bot_answer != FALLBACK_ANSWER:
+            block_ref = (f"gw:{valid_conversation_id}:{prior_turns // (carati_config.FREE_FOLLOW_UPS + 1)}"
+                         if valid_conversation_id else f"gw:msg:{uuid.uuid4()}")
+            try:
+                allowance.consume(resolved_user_uuid, "question", block_ref, None)
+            except Exception as e:
+                print(f"Allowance consume failed: {e}")
         usage_after = _usage_snapshot(resolved_user_uuid) if resolved_user_uuid else None
 
         return {
@@ -932,7 +900,7 @@ async def list_conversations(user_id: str, limit: int = CONVERSATIONS_LIMIT):
         recent = (
             supabase.table("messages")
             .select("conversation_id, timestamp")
-            .eq("userid", resolved)
+            .in_("userid", all_ids(resolve_student(user_id) or {"id": resolved}))
             .eq("role", "student")
             .not_.is_("conversation_id", "null")
             .order("timestamp", desc=True)
